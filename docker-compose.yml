@@ -5,8 +5,17 @@ services:
     restart: unless-stopped
 
     # 金鑰與設定。這個檔案不進版控。
+    # 變數以環境變數注入，所以 .env 不需要進映像檔。
     env_file:
       - .env
+
+    environment:
+      # 不設的話容器用 UTC，日誌時間會與主機差 8 小時，比對時很混亂。
+      # 資料庫的時間戳一律存 UTC（程式自己處理），這裡只影響日誌顯示。
+      - TZ=${TZ:-Asia/Hong_Kong}
+
+    # PID 1 交給 tini 處理訊號與回收殭屍程序
+    init: true
 
     volumes:
       - ./data:/app/data                       # SQLite

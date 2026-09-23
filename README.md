@@ -232,14 +232,36 @@ Bot API **沒有**「依 message_id 取訊息」的方法，`reply_to_message` �
 
 ## 部署
 
-### Docker（推薦）
+### 容器（推薦）
+
+Docker 與 Podman 皆可，`docker-compose.yml` 兩邊通用：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build     # Docker
+podman compose up -d --build     # Podman（會轉呼叫 docker-compose）
+
 docker compose logs -f
+docker compose down
 ```
 
-`docker-compose.yml` 已把 `data/`、`logs/`、`config/persona.md` 掛載出來，容器重建不會遺失。
+**機密不進映像檔。** `.env` 由 compose 以環境變數注入，`config/persona.md` 由 volume
+唯讀掛載。已經實測驗證：建出來的映像檔裡沒有這兩者。
+
+掛載出來的東西：
+
+| 主機路徑 | 容器路徑 | 用途 |
+|---|---|---|
+| `./data` | `/app/data` | SQLite 資料庫 |
+| `./logs` | `/app/logs` | 日誌 |
+| `./config/persona.md` | `/app/config/persona.md`（唯讀） | 人設 |
+
+`.dockerignore` 是必要的 —— 少了它，建置會把整個 `.venv` 送進建置上下文。
+
+容器以非 root 使用者（`whale`）執行。rootless Podman 的掛載目錄權限
+實測可寫，若遇到權限問題可加 `--userns=keep-id`。
+
+`TZ` 預設為 `Asia/Hong_Kong`。不設的話容器用 UTC，日誌時間會與主機差 8 小時。
+（資料庫的時間戳一律存 UTC，由程式自己處理，不受此影響。）
 
 ### systemd
 

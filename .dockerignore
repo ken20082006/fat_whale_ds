@@ -1,0 +1,22 @@
+# 建置環境不需要的東西。少了這個，建置會把整個 .venv 送進建置上下文。
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# 執行期資料與機密：容器靠 volume 掛載，不進映像檔
+.git/
+.gitignore
+data/
+logs/
+backups/
+assets/
+config/persona.md
+.env
+
+# 開發用檔案：Dockerfile 不會 COPY 它們，排除只是為了加快建置
+tests/
+scripts/
+deploy/
+*.md
+!README.md
