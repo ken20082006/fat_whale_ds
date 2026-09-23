@@ -131,7 +131,9 @@ def test_persona_includes_sticker_menu_when_given():
     assert "### 貼圖" in prompt
     assert "[[貼圖:編號]]" in prompt
     assert "1｜想表達開心時" in prompt
-    assert "偶爾用就好" in prompt
+    # 要給明確頻率，否則模型會索性完全不用
+    assert "每五到十則" in prompt
+    assert "該用而沒用" in prompt
 
 
 def test_persona_omits_sticker_section_without_menu():
