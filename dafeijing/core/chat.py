@@ -13,6 +13,7 @@ from .access import AccessControl
 from .media import PreparedImage
 from .memory import MemoryExtractor
 from .persona import Persona, PersonaContext
+from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .usage import UsageLog
 
@@ -50,6 +51,7 @@ class ChatService:
         self._llm = llm
         self._usage = usage
         self._memory = memory
+        self.blocked_leaks = 0
 
     async def respond(self, req: ChatRequest) -> LLMResult:
         user = await self._access.get_user(req.tg_user_id)
@@ -98,6 +100,16 @@ class ChatService:
         )
 
         result = await self._llm.chat(messages, max_tokens=max_tokens, reasoning=reasoning)
+
+        # 輸出側的洩漏檢查。在落庫之前替換掉，被攔下的內容才不會進到對話歷史裡，
+        # 免得下一輪又被當成自己說過的話而強化。
+        leak = find_system_leak(result.text, self._persona.static_text)
+        if leak:
+            self.blocked_leaks += 1
+            logger.warning(
+                "攔下疑似系統提示洩漏（%d 字重疊）：%s…", len(leak), leak[:40]
+            )
+            result.text = LEAK_REPLY
 
         # 成功後才落庫。失敗的回合不留下痕跡，使用者重試時不會出現半截對話。
         # 只留文字描述不留圖檔：省空間，也避免使用者的照片被長期保存。

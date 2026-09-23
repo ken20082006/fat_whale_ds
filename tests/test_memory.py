@@ -62,7 +62,8 @@ def test_worth_extracting_skips_small_talk():
 
 
 def test_worth_extracting_skips_bare_media_markers():
-    assert not _worth_extracting("〔貼圖，emoji：😭〕")
+    assert not _worth_extracting("〔貼圖〕")
+    assert not _worth_extracting("〔動態貼圖〕")
     assert not _worth_extracting("〔圖片〕")
 
 

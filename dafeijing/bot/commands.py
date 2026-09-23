@@ -520,6 +520,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"　待驗證　　　　{pending}\n"
         f"　對話 session　{sessions}\n"
         f"　群組快取　　　{cached} 則\n"
+        f"　攔下的洩漏　　{svc.chat.blocked_leaks}\n"
         f"　累計錯誤　　　{svc.errors}\n"
         f"　運行時間　　　{uptime // 3600} 小時 {uptime % 3600 // 60} 分"
     )

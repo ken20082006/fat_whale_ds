@@ -9,6 +9,7 @@ Telegram 傳來的貼圖訊息只有 file_unique_id 與 emoji，沒有圖檔內�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
@@ -48,14 +49,29 @@ async def prepare_from_telegram(
     *,
     max_edge: int,
     source: str,
+    attempts: int = 3,
 ) -> PreparedImage:
-    """從 Telegram 下載並轉換。bot 為 telegram.Bot 實例。"""
-    try:
-        tg_file = await bot.get_file(file_id)
-        blob = bytes(await tg_file.download_as_bytearray())
-    except Exception as exc:
-        logger.warning("下載檔案失敗（%s）：%s", file_id, exc)
-        raise MediaError("本鯨拿不到那個檔案。") from exc
+    """從 Telegram 下載並轉換。bot 為 telegram.Bot 實例。
+
+    下載逾時很常見（尤其是在家用網路），所以會重試。
+    一次失敗就回「拿不到檔案」對使用者來說是無謂的挫折。
+    """
+    blob: bytes | None = None
+
+    for attempt in range(attempts):
+        try:
+            tg_file = await bot.get_file(file_id)
+            blob = bytes(await tg_file.download_as_bytearray())
+            break
+        except Exception as exc:
+            logger.warning(
+                "下載檔案失敗（第 %d/%d 次，%s）：%s", attempt + 1, attempts, file_id, exc
+            )
+            if attempt + 1 < attempts:
+                await asyncio.sleep(1.0 * (attempt + 1))
+
+    if blob is None:
+        raise MediaError("本鯨拿不到那個檔案，可能是網路不穩。等一下再傳一次。")
 
     return prepare_from_bytes(blob, max_edge=max_edge, source=source)
 
@@ -95,11 +111,13 @@ def describe(message) -> str:
     寫成客觀標註而非描述，才不會誘導它去描述畫面。
     """
     if message.sticker:
-        emoji = message.sticker.emoji or "無"
+        # 刻意不寫出 sticker.emoji。那是貼圖包作者標的，不一定對應畫面內容，
+        # 餵給模型會讓它照著 emoji 反應而不是照圖。讓它自己看。
+        # 但保留格式資訊 —— 動態貼圖送的是第一格縮圖，講清楚它才不會過度解讀。
         kind = "動態貼圖" if message.sticker.is_animated else (
             "影片貼圖" if message.sticker.is_video else "貼圖"
         )
-        return f"〔{kind}，emoji：{emoji}〕"
+        return f"〔{kind}〕"
     if message.photo:
         return "〔圖片〕"
     return "〔檔案〕"
