@@ -36,6 +36,33 @@ def test_today_omitted_when_not_given():
     assert "### 今天" not in Persona("角色").build(PersonaContext())
 
 
+def test_capability_block_reflects_config():
+    """能力說明必須跟著設定走。
+
+    寫死「你沒有網路能力」的那一版，在聯網功能上線之後變成謊言 ——
+    模型照著它回答，使用者就被告知「上唔到網」。
+    """
+    with_search = Persona("角色").build(PersonaContext(can_search=True, can_fetch=True))
+    assert "能聯網搜尋" in with_search
+    assert "能讀取對方貼給你的連結" in with_search
+
+    without = Persona("角色").build(PersonaContext(can_search=False, can_fetch=False))
+    assert "沒有開啟聯網搜尋" in without
+    assert "能聯網搜尋" not in without
+
+
+def test_capability_block_always_denies_execution():
+    for ctx in (PersonaContext(), PersonaContext(can_search=True, can_fetch=True)):
+        prompt = Persona("角色").build(ctx)
+        assert "不能執行程式" in prompt
+
+
+def test_security_rule_does_not_deny_network_access():
+    """安全界線不能斷言「沒有網路能力」—— 那會與實際功能矛盾。"""
+    prompt = Persona("角色").build(PersonaContext(can_search=True))
+    assert "存取網路" not in prompt
+
+
 def test_security_rule_is_present():
     prompt = Persona("角色").build(PersonaContext())
     assert "### 安全界線" in prompt
