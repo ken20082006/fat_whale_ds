@@ -100,6 +100,25 @@ class FetchedPage:
         return f"<網頁 url=\"{self.url}\" title=\"{self.title}\">\n{self.text}\n</網頁>"
 
 
+# 模型自己想查時輸出的標記。
+SEARCH_MARKER = re.compile(r"\[\[\s*搜尋\s*[:：]\s*(.+?)\s*\]\]")
+
+
+def extract_search_marker(text: str) -> tuple[str, str | None]:
+    """把「我要查」的標記抽出來，回傳 (清理後文字, 查詢字串)。
+
+    模型自己判斷要查時用這個表達 —— OpenRouter 的 web 外掛沒辦法讓模型
+    自行啟用，只能由模型發出訊號、我們再帶著外掛重跑一次。
+    """
+    match = SEARCH_MARKER.search(text or "")
+    if match is None:
+        return text, None
+
+    query = match.group(1).strip()
+    cleaned = SEARCH_MARKER.sub("", text).strip()
+    return cleaned, query or None
+
+
 def wants_search(text: str, mode: str = "auto") -> bool:
     """這則訊息該不該去網上查。
 

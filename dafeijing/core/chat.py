@@ -17,7 +17,7 @@ from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
 from .util import today_text
-from .webfetch import fetch_all, find_urls, wants_search
+from .webfetch import extract_search_marker, fetch_all, find_urls, wants_search
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,34 @@ class ChatService:
             messages, max_tokens=max_tokens, reasoning=reasoning, web_search=search
         )
 
-        # 先把貼圖標記拿掉 —— 那是給系統看的，不能留在訊息裡。
+        # 模型自己決定要查：第一次它只回了一行標記，這裡帶著外掛重跑一次。
+        # 這是唯一能讓模型自決的方法 —— web 外掛沒有「讓模型啟用自己」的介面。
+        if not search and mode != "off":
+            _, query = extract_search_marker(result.text)
+            if query:
+                logger.info("模型自行要求搜尋：%s", query)
+                self.web_searches += 1
+                search = True
+                result = await self._llm.chat(
+                    [
+                        *messages,
+                        {
+                            "role": "user",
+                            "content": (
+                                f"（先上網查「{query}」，再用查到的內容回答我上一則問題。"
+                                f"這次不要再輸出標記。）"
+                            ),
+                        },
+                    ],
+                    max_tokens=max_tokens,
+                    reasoning=reasoning,
+                    web_search=True,
+                )
+
+        # 先把標記拿掉 —— 那是給系統看的，不能留在訊息裡。
+        # 模型有可能在第二次仍然輸出搜尋標記，所以兩種都清。
+        result.text, _ = extract_search_marker(result.text)
+        result.text = result.text or "本鯨查完之後不知道該說什麼，再問一次好嗎。"
         cleaned, sticker_index = extract_marker(result.text)
         result.text = cleaned
 
