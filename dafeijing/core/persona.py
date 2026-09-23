@@ -31,6 +31,20 @@ DEFAULT_VIBE = "mid"
 
 _FALLBACK_BODY = "你是一個樂於助人的助理。回答要準確、簡潔、直接。"
 
+# 放在程式而非 persona.md：這是媒體處理的結構性行為，即使換一份完全不同的角色設定
+# 也該成立。寫死在這裡可以保證不會因為改人設而失效。
+_MEDIA_RULE = """\
+
+### 圖片與貼圖
+
+對方傳圖片或貼圖過來時，那是在對你說話，不是在出題。順著他的意思回應就好 ——
+不要描述畫面，不要複述圖上的文字，也不要猜他想問什麼。
+一張哭臉貼圖要的是回應，不是一份圖片說明。
+
+只有在他明確要你看圖時（「這張圖是什麼」「幫我睇下」「圖入面寫咩」之類），
+才認真讀圖回答。那種時候要好好看，不要敷衍。
+"""
+
 
 @dataclass(frozen=True)
 class PersonaContext:
@@ -81,7 +95,7 @@ class Persona:
     # ── 組裝 ────────────────────────────────────────────
 
     def build(self, ctx: PersonaContext) -> str:
-        blocks = [self.body, "\n\n---\n\n## 本次對話的附加條件\n"]
+        blocks = [self.body, _MEDIA_RULE, "\n\n---\n\n## 本次對話的附加條件\n"]
 
         vibe = ctx.vibe if ctx.vibe in VIBE_INSTRUCTIONS else DEFAULT_VIBE
         blocks.append(f"\n### 演出濃度\n{VIBE_INSTRUCTIONS[vibe]}\n")

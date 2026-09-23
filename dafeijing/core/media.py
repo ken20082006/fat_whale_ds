@@ -89,16 +89,20 @@ def prepare_from_bytes(blob: bytes, *, max_edge: int, source: str) -> PreparedIm
 
 
 def describe(message) -> str:
-    """為帶圖片的訊息產生一句文字描述，讓對話紀錄讀得懂。"""
+    """為帶圖片的訊息產生一行標註。
+
+    這是給對話紀錄與引用串用的中繼資料，不是給模型看的圖說 ——
+    寫成客觀標註而非描述，才不會誘導它去描述畫面。
+    """
     if message.sticker:
-        emoji = message.sticker.emoji or "無對應 emoji"
+        emoji = message.sticker.emoji or "無"
         kind = "動態貼圖" if message.sticker.is_animated else (
             "影片貼圖" if message.sticker.is_video else "貼圖"
         )
-        return f"（使用者傳了一張{kind}，對應 emoji：{emoji}）"
+        return f"〔{kind}，emoji：{emoji}〕"
     if message.photo:
-        return "（使用者傳了一張圖片）"
-    return "（使用者傳了一個檔案）"
+        return "〔圖片〕"
+    return "〔檔案〕"
 
 
 def pick_file(message) -> tuple[str, str] | None:
