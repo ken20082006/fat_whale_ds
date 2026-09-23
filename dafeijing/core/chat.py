@@ -146,11 +146,19 @@ class ChatService:
         if search:
             self.web_searches += 1
 
+        # 送出去的用整條引用串；存進歷史的只用「對方自己那一句」。
+        #
+        # 群組的引用串是累積的 —— 同一條串每輪都存一次，歷史會重複膨脹
+        # （實測六輪就從 2.1k 漲到 3.0k token），而那些內容在下一輪的
+        # 引用串裡又會再出現一次。歷史只需要記「誰在什麼時候問了什麼」。
+        stored_base = trigger_text if req.is_group and trigger_text else base_text
+
         if page_blocks:
             user_content = f"{base_text}\n\n" + "\n\n".join(page_blocks)
-            stored_content = f"{base_text}\n\n〔讀取了 {len(page_blocks)} 個連結〕"
+            stored_content = f"{stored_base}\n\n〔讀取了 {len(page_blocks)} 個連結〕"
         else:
-            user_content = stored_content = base_text
+            user_content = base_text
+            stored_content = stored_base
 
         history = await self._sessions.window(req.session.id)
 
