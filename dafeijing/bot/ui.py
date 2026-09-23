@@ -127,6 +127,18 @@ async def typing(bot, chat_id: int) -> AsyncIterator[None]:
             await task
 
 
+async def send_sticker(bot, chat_id: int, file_id: str, *, reply_to: int | None = None):
+    """送出一張貼圖。回傳送出的 Message，失敗回傳 None。
+
+    貼圖是點綴，送不出去不該讓整輪回覆失敗。
+    """
+    try:
+        return await bot.send_sticker(chat_id, file_id, reply_to_message_id=reply_to)
+    except TelegramError as exc:
+        logger.warning("貼圖送出失敗（%s）：%s", file_id, exc)
+        return None
+
+
 async def reply_plain(message: Message, text: str) -> None:
     try:
         await message.reply_text(text, disable_web_page_preview=True)

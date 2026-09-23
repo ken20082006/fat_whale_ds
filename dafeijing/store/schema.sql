@@ -92,13 +92,20 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at  TEXT    NOT NULL
 );
 
--- 貼圖對照表：Telegram 只給 file_unique_id 與 emoji，不含圖檔內容
+-- 貼圖對照表。
+-- Telegram 只給 file_unique_id 與 emoji，不含圖檔內容，所以「看得懂」要靠讀圖；
+-- 但「挑得出來」得先離線標註一次 —— 總不能每次回覆都把一百多張圖塞給模型選。
+-- file_id 是發送時用的，與 file_unique_id 不同：前者可用於 sendSticker。
+-- featured 標記哪些要進提示裡的精選清單。標註可以有一百多張，
+-- 但每次回覆都放全部會把 prompt 撐爆，所以只挑一份精選。
 CREATE TABLE IF NOT EXISTS stickers (
     file_unique_id TEXT PRIMARY KEY,
     set_name       TEXT,
+    file_id        TEXT,
     emoji          TEXT,
     meaning        TEXT,
-    usage_hint     TEXT
+    usage_hint     TEXT,
+    featured       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS usage_log (

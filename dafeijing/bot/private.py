@@ -12,7 +12,7 @@ from ..core.chat import ChatRequest
 from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
-from .ui import reply_markdown, reply_plain, typing
+from .ui import reply_markdown, reply_plain, send_sticker, typing
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
     try:
         async with typing(context.bot, message.chat_id):
-            result = await svc.chat.respond(request)
+            outcome = await svc.chat.respond(request)
     except LLMError as exc:
         await reply_plain(message, str(exc))
         return
@@ -83,4 +83,9 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         await reply_plain(message, "本鯨這邊出了點狀況，已經記在日誌裡了。")
         return
 
-    await reply_markdown(message, result.text)
+    await reply_markdown(message, outcome.text)
+
+    if outcome.sticker_file_id:
+        await send_sticker(
+            context.bot, message.chat_id, outcome.sticker_file_id, reply_to=message.message_id
+        )

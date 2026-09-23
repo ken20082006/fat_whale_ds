@@ -24,7 +24,7 @@ from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
 from .services import Services
-from .ui import reply_markdown, reply_plain, typing
+from .ui import reply_markdown, reply_plain, send_sticker, typing
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         async with typing(context.bot, message.chat_id):
-            result = await svc.chat.respond(request)
+            outcome = await svc.chat.respond(request)
     except LLMError as exc:
         await reply_plain(message, str(exc))
         return
@@ -244,7 +244,7 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         await reply_plain(message, "本鯨這邊出了點狀況。")
         return
 
-    sent = await reply_markdown(message, result.text)
+    sent = await reply_markdown(message, outcome.text)
     if sent is not None:
         # 本鯨自己的訊息不會從 Telegram 收到，必須自己補進快取，
         # 否則別人回覆本鯨時，引用鏈會在這裡斷掉。
@@ -254,8 +254,30 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_to_id=message.message_id,
             user_id=svc.bot_id,
             display_name=svc.bot_name,
-            text=result.text,
+            text=outcome.text,
         )
+
+    # 貼圖另外送一則。同樣要補進快取 —— 否則別人回覆那張貼圖時，
+    # 引用鏈會斷在它身上，而且圖也抓不回來。
+    if outcome.sticker_file_id:
+        sticker_message = await send_sticker(
+            context.bot,
+            message.chat_id,
+            outcome.sticker_file_id,
+            reply_to=message.message_id,
+        )
+        if sticker_message is not None:
+            await svc.chain.cache_message(
+                chat_id=message.chat_id,
+                message_id=sticker_message.message_id,
+                reply_to_id=message.message_id,
+                user_id=svc.bot_id,
+                display_name=svc.bot_name,
+                text="〔貼圖〕",
+                has_media=True,
+                media_file_id=outcome.sticker_file_id,
+                media_source="sticker",
+            )
 
 
 async def _gather_chain_media(

@@ -15,6 +15,7 @@ from .memory import MemoryExtractor
 from .persona import Persona, PersonaContext
 from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
+from .stickers import StickerLibrary, extract_marker
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,15 @@ class ChatRequest:
     images: list[PreparedImage] = field(default_factory=list)
 
 
+@dataclass
+class ChatOutcome:
+    """一輪回覆的結果。貼圖與文字分開，因為送出方式不同。"""
+
+    text: str
+    result: LLMResult
+    sticker_file_id: str | None = None
+
+
 class ChatService:
     def __init__(
         self,
@@ -43,6 +53,7 @@ class ChatService:
         llm: OpenRouterClient,
         usage: UsageLog,
         memory: MemoryExtractor,
+        stickers: StickerLibrary,
     ) -> None:
         self._cfg = cfg
         self._persona = persona
@@ -51,9 +62,10 @@ class ChatService:
         self._llm = llm
         self._usage = usage
         self._memory = memory
+        self._stickers = stickers
         self.blocked_leaks = 0
 
-    async def respond(self, req: ChatRequest) -> LLMResult:
+    async def respond(self, req: ChatRequest) -> ChatOutcome:
         user = await self._access.get_user(req.tg_user_id)
         vibe = (user["vibe"] if user else None) or "mid"
 
@@ -74,6 +86,7 @@ class ChatService:
                 notes=notes,
                 summary=req.session.summary,
                 is_group=req.is_group,
+                sticker_menu=self._stickers.menu() if self._stickers.available else None,
             )
         )
 
@@ -100,6 +113,20 @@ class ChatService:
         )
 
         result = await self._llm.chat(messages, max_tokens=max_tokens, reasoning=reasoning)
+
+        # 先把貼圖標記拿掉 —— 那是給系統看的，不能留在訊息裡。
+        cleaned, sticker_index = extract_marker(result.text)
+        result.text = cleaned
+
+        sticker_file_id: str | None = None
+        if sticker_index is not None:
+            entry = self._stickers.resolve(sticker_index)
+            if entry is not None:
+                sticker_file_id = entry.file_id
+            else:
+                # 模型編了清單上沒有的號碼。標記已經拿掉，就當作沒這回事，
+                # 不要送出不相干的貼圖。
+                logger.warning("模型指定的貼圖編號不存在：%s", sticker_index)
 
         # 輸出側的洩漏檢查。在落庫之前替換掉，被攔下的內容才不會進到對話歷史裡，
         # 免得下一輪又被當成自己說過的話而強化。
@@ -152,4 +179,8 @@ class ChatService:
             result.reasoning_tokens,
             result.cached_tokens,
         )
-        return result
+        return ChatOutcome(
+            text=result.text,
+            result=result,
+            sticker_file_id=sticker_file_id,
+        )

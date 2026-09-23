@@ -15,6 +15,7 @@ from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
+from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
@@ -36,6 +37,7 @@ class Services:
     limiter: RateLimiter
     group_access: MembershipCache
     memory: MemoryExtractor
+    stickers: StickerLibrary
 
     bot_username: str = ""
     bot_id: int = 0

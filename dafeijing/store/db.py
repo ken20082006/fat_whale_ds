@@ -25,6 +25,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("memory_notes", "scope", "TEXT NOT NULL DEFAULT 'private'"),
     ("group_cache", "media_file_id", "TEXT"),
     ("group_cache", "media_source", "TEXT"),
+    ("stickers", "file_id", "TEXT"),
+    ("stickers", "featured", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

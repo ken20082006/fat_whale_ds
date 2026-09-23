@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -23,6 +24,7 @@ from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
+from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
@@ -44,6 +46,7 @@ def create_services(cfg: Settings) -> Services:
     llm = OpenRouterClient(cfg)
     usage = UsageLog(db)
     memory = MemoryExtractor(cfg, sessions, llm)
+    stickers = StickerLibrary(cfg)
 
     return Services(
         cfg=cfg,
@@ -54,8 +57,9 @@ def create_services(cfg: Settings) -> Services:
         persona=persona,
         llm=llm,
         usage=usage,
-        chat=ChatService(cfg, persona, sessions, access, llm, usage, memory),
+        chat=ChatService(cfg, persona, sessions, access, llm, usage, memory, stickers),
         memory=memory,
+        stickers=stickers,
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
@@ -157,8 +161,22 @@ def build_application(svc: Services) -> Application:
 async def _post_init(application: Application) -> None:
     svc: Services = application.bot_data["services"]
     await svc.db.connect()
+    await svc.stickers.load(svc.db)
 
-    me = await application.bot.get_me()
+    # 啟動時一次網路抖動就會讓整個 bot 起不來，所以重試。
+    # get_me 失敗沒有什麼可補救的，但不該因此開不了機。
+    me = None
+    for attempt in range(5):
+        try:
+            me = await application.bot.get_me()
+            break
+        except Exception as exc:
+            logger.warning("取得 bot 資訊失敗（第 %d/5 次）：%s", attempt + 1, exc)
+            await asyncio.sleep(2.0 * (attempt + 1))
+
+    if me is None:
+        raise RuntimeError("連不上 Telegram，無法啟動")
+
     svc.bot_username = me.username or ""
     svc.bot_id = me.id
     svc.bot_name = me.first_name or "大肥鯨"

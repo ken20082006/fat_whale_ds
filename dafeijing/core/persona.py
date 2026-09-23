@@ -78,6 +78,7 @@ class PersonaContext:
     notes: list[str] = field(default_factory=list)
     summary: str | None = None
     is_group: bool = False
+    sticker_menu: str | None = None
 
 
 class Persona:
@@ -161,6 +162,21 @@ class Persona:
             )
             blocks.append(f"{ctx.summary}\n")
             blocks.append("</摘要>\n")
+
+        if ctx.sticker_menu:
+            blocks.append(
+                "\n### 貼圖\n"
+                "你有一組貼圖可用。想用的時候，在回覆的最後加上 [[貼圖:編號]]，"
+                "系統會把那張貼圖一併送出。\n\n"
+                "規則：\n"
+                "- **偶爾用就好。** 多數回覆不該有貼圖，連續幾則裡最多一則\n"
+                "- 只在情緒明顯、或氣氛輕鬆時用。對方認真問事、在忙、在焦慮時不要用\n"
+                "- 編號只能取自下面的清單，不要自己編\n"
+                "- 標記放在整段回覆的最後，前後不要加其他說明\n\n"
+                "<可用貼圖>\n"
+                f"{ctx.sticker_menu}\n"
+                "</可用貼圖>\n"
+            )
 
         return "".join(blocks)
 
