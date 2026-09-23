@@ -63,6 +63,22 @@ def test_security_rule_does_not_deny_network_access():
     assert "存取網路" not in prompt
 
 
+def test_length_rule_is_present():
+    prompt = Persona("角色").build(PersonaContext())
+    assert "### 長度" in prompt
+    assert "預設要短" in prompt
+    # 要明確禁止文件格式，否則模型會用一整排 bullet 回答閒聊
+    assert "不要動輒用標題、項目符號" in prompt
+    # 也要保留例外，否則連寫程式都會被壓成兩句
+    assert "該長就長" in prompt
+
+
+def test_length_rule_comes_early():
+    """長度是最容易失控的一項，放在人設之後、安全界線之前。"""
+    prompt = Persona("角色").build(PersonaContext())
+    assert prompt.index("### 長度") < prompt.index("### 安全界線")
+
+
 def test_security_rule_is_present():
     prompt = Persona("角色").build(PersonaContext())
     assert "### 安全界線" in prompt

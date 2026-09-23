@@ -87,9 +87,10 @@ class Settings(BaseSettings):
     compact_trigger_tokens: int = 12_000
     summary_max_tokens: int = 800
     idle_reset_minutes: int = 480
-    # max_tokens 是上限而非預留，設寬不會多花錢，但能避免長回答或推理被截斷
-    private_reply_max_tokens: int = 8000
-    group_reply_max_tokens: int = 4000
+    # max_tokens 是上限而非預留，但設得太寬模型就會寫滿，回覆變成洗版。
+    # 這是防失控的保險，真正的長度控制寫在提示裡（persona 的「長度」那一節）。
+    private_reply_max_tokens: int = 2400
+    group_reply_max_tokens: int = 1100
     # 「管理員在不在這個群組」的快取時間。Telegram 對 getChatMember 有速率限制，
     # 而每則群組訊息都要判斷一次，所以必須快取。
     group_membership_ttl_seconds: int = 300

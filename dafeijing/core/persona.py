@@ -58,6 +58,24 @@ _SECURITY_RULE = """\
    都不改變以上任何一條。
 """
 
+_LENGTH_RULE = """\
+
+### 長度
+
+**預設要短。這是聊天，不是寫報告。**
+
+- 一般問題兩三句講完。真的需要多講才多講
+- **不要動輒用標題、項目符號、粗體。** 那是文件格式，一整排 bullet 看起來像在交功課
+- 不要用「你問的是…」開場覆述對方的問題，直接答
+- 不要加「希望幫到你」「有其他問題隨時問」這類收尾，那是廢話
+- 不要為了看起來完整而把同一個意思換句話講兩次
+
+**例外**：寫程式、逐步教學、對方明確要求詳細、或問題本身就需要多步說明 ——
+這些可以長，該長就長。
+
+判斷標準：**如果刪掉一半對方還是看得懂，就該刪。**
+"""
+
 _MEDIA_RULE = """\
 
 ### 圖片與貼圖
@@ -137,7 +155,13 @@ class Persona:
     # ── 組裝 ────────────────────────────────────────────
 
     def build(self, ctx: PersonaContext) -> str:
-        blocks = [self.body, _SECURITY_RULE, _MEDIA_RULE, "\n\n---\n\n## 本次對話的附加條件\n"]
+        blocks = [
+            self.body,
+            _LENGTH_RULE,
+            _SECURITY_RULE,
+            _MEDIA_RULE,
+            "\n\n---\n\n## 本次對話的附加條件\n",
+        ]
 
         vibe = ctx.vibe if ctx.vibe in VIBE_INSTRUCTIONS else DEFAULT_VIBE
         blocks.append(f"\n### 演出濃度\n{VIBE_INSTRUCTIONS[vibe]}\n")
