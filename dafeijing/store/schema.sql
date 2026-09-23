@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT,
     daily_cap     INTEGER,                              -- NULL = 不限
     vibe          TEXT    NOT NULL DEFAULT 'mid',       -- low | mid | high
+    reasoning     INTEGER,                              -- NULL = 跟隨全域設定；0/1 = 個人指定
     created_at    TEXT    NOT NULL,
     last_seen_at  TEXT
 );
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS usage_log (
     prompt_tokens     INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
     cached_tokens     INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens  INTEGER NOT NULL DEFAULT 0,       -- 推理額度，以輸出計價
     image_tokens      INTEGER NOT NULL DEFAULT 0,
     cost              REAL    NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -217,6 +218,51 @@ def test_group_reply_chain_resolution():
             # 格式化後應含發言者
             text = chain.format_for_prompt(resolved, "大肥鯨")
             assert "【甲】第一句" in text
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_schema_includes_reasoning_columns():
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+
+            user_cols = {row[1] for row in await db.fetchall("PRAGMA table_info(users)")}
+            assert "reasoning" in user_cols
+
+            usage_cols = {row[1] for row in await db.fetchall("PRAGMA table_info(usage_log)")}
+            assert "reasoning_tokens" in usage_cols
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_migration_adds_columns_to_existing_db():
+    """舊資料庫啟動時要自動補欄位，不能要求使用者重建。"""
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+
+            # 模擬上一個版本的資料庫：users 還沒有 reasoning 欄位
+            conn = sqlite3.connect(path)
+            conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, tg_user_id INTEGER)")
+            conn.execute("INSERT INTO users (tg_user_id) VALUES (12345)")
+            conn.commit()
+            conn.close()
+
+            db = Database(path)
+            await db.connect()
+
+            columns = {row[1] for row in await db.fetchall("PRAGMA table_info(users)")}
+            assert "reasoning" in columns
+
+            # 既有資料要留著
+            row = await db.fetchone("SELECT tg_user_id FROM users WHERE id = 1")
+            assert row["tg_user_id"] == 12345
 
             await db.close()
 

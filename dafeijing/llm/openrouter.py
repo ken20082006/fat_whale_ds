@@ -31,6 +31,7 @@ class LLMResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    reasoning_tokens: int = 0
     image_tokens: int = 0
     cost: float = 0.0
     finish_reason: str | None = None
@@ -69,6 +70,7 @@ class OpenRouterClient:
         model: str | None = None,
         max_tokens: int | None = None,
         temperature: float = 1.0,
+        reasoning: bool | None = None,
     ) -> LLMResult:
         payload = {
             "model": model or self._cfg.model,
@@ -79,16 +81,22 @@ class OpenRouterClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
+        # 這個模型預設會做推理，而推理 token 以輸出計價、且會佔用 max_tokens 額度。
+        # 只有明確要關的時候才送參數；其他值（effort=low/minimal）實測無效。
+        if reasoning is False:
+            payload["reasoning"] = {"enabled": False}
+
         data = await self._post(payload)
         return self._parse(data)
 
     async def summarise(self, prompt: str, max_tokens: int | None = None) -> str:
-        """內部工作（摘要／壓縮）走便宜的模型，且不需要人設。"""
+        """內部工作（摘要／壓縮）走便宜的模型，且不需要人設或推理。"""
         result = await self.chat(
             [{"role": "user", "content": prompt}],
             model=self._cfg.model_utility,
             max_tokens=max_tokens or self._cfg.summary_max_tokens,
             temperature=0.3,
+            reasoning=False,
         )
         return result.text
 
@@ -143,15 +151,20 @@ class OpenRouterClient:
         message = choice.get("message") or {}
         text = (message.get("content") or "").strip()
 
-        if not text:
-            reason = choice.get("finish_reason")
-            if reason == "length":
-                raise LLMError("回覆長度被截斷了，試試把問題拆小一點。")
-            raise LLMError("模型回傳了空白內容。")
-
         usage = data.get("usage") or {}
         prompt_details = usage.get("prompt_tokens_details") or {}
         completion_details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = int(completion_details.get("reasoning_tokens") or 0)
+
+        if not text:
+            # 推理模型可能把整個額度花在思考上，導致 content 是空的。
+            if choice.get("finish_reason") == "length" or reasoning_tokens:
+                raise LLMError(
+                    "本鯨想得太久，額度用完了。縮短問題，或用 /think off 關掉深度思考。"
+                )
+            if message.get("refusal"):
+                raise LLMError("模型拒絕回答這個問題。")
+            raise LLMError("模型回傳了空白內容。")
 
         return LLMResult(
             text=text,
@@ -159,6 +172,7 @@ class OpenRouterClient:
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
             cached_tokens=int(prompt_details.get("cached_tokens") or 0),
+            reasoning_tokens=reasoning_tokens,
             image_tokens=int(completion_details.get("image_tokens") or 0),
             cost=float(usage.get("cost") or 0.0),
             finish_reason=choice.get("finish_reason"),

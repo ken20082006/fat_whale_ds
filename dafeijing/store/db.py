@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
+# 後續版本新增的欄位。舊資料庫啟動時會自動補上。
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("users", "reasoning", "INTEGER"),
+    ("usage_log", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+)
+
 
 class Database:
     def __init__(self, path: str | Path) -> None:
@@ -35,8 +41,25 @@ class Database:
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.execute("PRAGMA busy_timeout=5000")
         await self._conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        await self._add_missing_columns()
         await self._conn.commit()
         logger.info("資料庫就緒：%s", self._path)
+
+    async def _add_missing_columns(self) -> None:
+        """既有的資料庫不會因為新增欄位而重建，這裡補上缺的。
+
+        CREATE TABLE IF NOT EXISTS 只對新庫生效，舊庫要自己 ALTER。
+        """
+        assert self._conn is not None
+        for table, column, definition in _ADDED_COLUMNS:
+            async with self._conn.execute(f"PRAGMA table_info({table})") as cursor:
+                existing = {row[1] for row in await cursor.fetchall()}
+            if not existing:
+                continue  # 這張表還不存在，schema 會處理
+            if column in existing:
+                continue
+            await self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            logger.info("資料庫補上欄位：%s.%s", table, column)
 
     async def close(self) -> None:
         if self._conn is not None:

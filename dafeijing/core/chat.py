@@ -50,6 +50,12 @@ class ChatService:
         user = await self._access.get_user(req.tg_user_id)
         vibe = (user["vibe"] if user else None) or "mid"
 
+        # 推理 token 以輸出計價。預設關閉，由使用者用 /think 個別覆寫。
+        if user is not None and user["reasoning"] is not None:
+            reasoning = bool(user["reasoning"])
+        else:
+            reasoning = self._cfg.reasoning_enabled
+
         notes: list[str] = []
         if not req.is_group:
             notes = await self._sessions.notes(req.tg_user_id)
@@ -75,7 +81,7 @@ class ChatService:
             self._cfg.group_reply_max_tokens if req.is_group else self._cfg.private_reply_max_tokens
         )
 
-        result = await self._llm.chat(messages, max_tokens=max_tokens)
+        result = await self._llm.chat(messages, max_tokens=max_tokens, reasoning=reasoning)
 
         # 成功後才落庫。失敗的回合不留下痕跡，使用者重試時不會出現半截對話。
         await self._sessions.append(req.session.id, "user", user_content)
@@ -88,6 +94,7 @@ class ChatService:
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
             cached_tokens=result.cached_tokens,
+            reasoning_tokens=result.reasoning_tokens,
             image_tokens=result.image_tokens,
             cost=result.cost,
         )
@@ -98,10 +105,11 @@ class ChatService:
             logger.exception("壓縮歷史失敗，不影響本次回覆")
 
         logger.info(
-            "%s → %d in / %d out（快取 %d）",
+            "%s → %d in / %d out（推理 %d、快取 %d）",
             "群組" if req.is_group else "私聊",
             result.prompt_tokens,
             result.completion_tokens,
+            result.reasoning_tokens,
             result.cached_tokens,
         )
         return result

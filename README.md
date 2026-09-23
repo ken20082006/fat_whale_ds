@@ -30,8 +30,27 @@ DeepSeek 的擬人化 Telegram Bot。私人邀請制，只有拿到邀請碼的�
 
 **成本**
 
-- 完整記錄每人每次的 token 與費用
+- 完整記錄每人每次的 token 與費用，推理與快取分開計
 - 預設只記錄不封鎖，跑一段時間後再決定配額
+- 深度思考預設關閉，見下節
+
+---
+
+## 關於推理 token
+
+`deepseek/deepseek-v4.1-flash` **預設會做推理**，回應中帶一個 `reasoning` 欄位。
+這對成本有兩個影響，都是實測出來的：
+
+1. **推理 token 以輸出計價**。同一個問題，開啟推理 $0.000056、關閉 $0.000008 —— 相差七倍。
+2. **推理會佔用 `max_tokens` 額度**。額度用完時 `content` 會是 `null`，
+   使用者收到的是「本鯨想得太久，額度用完了」。這正是群組回覆上限原本設 400 會直接壞掉的原因。
+
+OpenRouter 的 `reasoning` 參數只有 `{"enabled": false}` 有效。
+`effort: "low"`、`effort: "minimal"`、`max_tokens: 0` 實測都無法降低推理量
+（`minimal` 甚至讓推理變多），所以本專案只用 enabled 開關。
+
+因此：**深度思考預設關閉**（`FW_REASONING_ENABLED`），使用者可用 `/think on` 個別開啟。
+對話管線與摘要都明確關閉推理；摘要是一次性的內部工作，不需要思考。
 
 ---
 
@@ -96,6 +115,7 @@ cp config/persona.example.md config/persona.md
 | `/context` | 看看目前記得多少 |
 | `/export` | 匯出對話為 Markdown |
 | `/vibe low\|mid\|high` | 調整人設濃度 |
+| `/think on\|off\|auto` | 深度思考開關 |
 | `/remember <內容>` | 寫入長期記憶 |
 | `/forget` | 清空長期記憶 |
 | `/quota` | 查自己的用量 |

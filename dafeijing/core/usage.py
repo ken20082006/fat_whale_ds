@@ -27,12 +27,14 @@ class UsageLog:
         prompt_tokens: int,
         completion_tokens: int,
         cached_tokens: int = 0,
+        reasoning_tokens: int = 0,
         image_tokens: int = 0,
         cost: float = 0.0,
     ) -> None:
         await self._db.execute(
             "INSERT INTO usage_log (user_id, chat_id, model, prompt_tokens, completion_tokens, "
-            "cached_tokens, image_tokens, cost, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "cached_tokens, reasoning_tokens, image_tokens, cost, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 chat_id,
@@ -40,6 +42,7 @@ class UsageLog:
                 prompt_tokens,
                 completion_tokens,
                 cached_tokens,
+                reasoning_tokens,
                 image_tokens,
                 cost,
                 now_iso(),
@@ -75,6 +78,7 @@ class UsageLog:
             "COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
             "COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
             "COALESCE(SUM(cached_tokens), 0) AS cached_tokens, "
+            "COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens, "
             "COALESCE(SUM(image_tokens), 0) AS image_tokens, "
             "COALESCE(SUM(cost), 0) AS cost "
             f"FROM usage_log WHERE created_at >= datetime('now', ?) {extra_where}",

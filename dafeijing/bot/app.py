@@ -92,6 +92,7 @@ def build_application(svc: Services) -> Application:
         ("undo", commands.cmd_undo),
         ("context", commands.cmd_context),
         ("vibe", commands.cmd_vibe),
+        ("think", commands.cmd_think),
         ("remember", commands.cmd_remember),
         ("forget", commands.cmd_forget),
         ("export", commands.cmd_export),

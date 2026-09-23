@@ -102,6 +102,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /export — 把這段對話匯出成檔案\n\n"
         "偏好\n"
         "  /vibe low | mid | high — 調整本鯨的演出濃度\n"
+        "  /think on | off | auto — 深度思考開關\n"
         "  /remember <內容> — 要本鯨長期記住這件事\n"
         "  /forget — 清掉長期記憶\n\n"
         "其他\n"
@@ -172,6 +173,7 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"中期　摘要 {session.summary_tokens} token",
         f"長期　{len(notes)} 則筆記",
         f"濃度　{row['vibe'] if row else 'mid'}",
+        "思考　" + ("跟隨預設" if row["reasoning"] is None else ("開啟" if row["reasoning"] else "關閉")),
         f"上次　{humanise_age(session.last_active_at)}",
     ]
     if session.summary:
@@ -206,6 +208,42 @@ async def cmd_vibe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "high": "好，本鯨今天心情不錯。",
     }
     await update.effective_message.reply_text(remarks[wanted])
+
+
+async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """深度思考開關。
+
+    這個模型預設會做推理，而推理 token 以輸出計價、又會佔用回覆額度。
+    關掉對閒聊毫無損失，遇到難題再打開。
+    """
+    if not await ensure_active(update, context):
+        return
+    svc = get_services(context)
+    user = update.effective_user
+    row = await svc.access.get_user(user.id)
+
+    argument = (context.args[0].lower() if context.args else "").strip()
+    if argument not in ("on", "off", "auto"):
+        current = "跟隨預設" if row["reasoning"] is None else ("開啟" if row["reasoning"] else "關閉")
+        default = "開啟" if svc.cfg.reasoning_enabled else "關閉"
+        await update.effective_message.reply_text(
+            f"深度思考：{current}（全域預設為{default}）\n\n"
+            "用法：/think on | off | auto\n"
+            "　on　　遇到難題再打開，想得久但答得準\n"
+            "　off　 直接回答，快又省（建議）\n"
+            "　auto　恢復跟隨全域設定"
+        )
+        return
+
+    enabled = {"on": True, "off": False}.get(argument)
+    await svc.access.set_reasoning(user.id, enabled)
+
+    remarks = {
+        "on": "好，本鯨開始動腦。回覆會慢一點，也貴一點。",
+        "off": "好，本鯨直接說重點。",
+        "auto": "好，恢復預設。",
+    }
+    await update.effective_message.reply_text(remarks[argument])
 
 
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -388,7 +426,7 @@ async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"近 {days} 天總帳：\n",
         f"　呼叫 {total.get('calls', 0):,} 次",
         f"　輸入 {total.get('prompt_tokens', 0):,}（快取命中 {total.get('cached_tokens', 0):,}）",
-        f"　輸出 {total.get('completion_tokens', 0):,}",
+        f"　輸出 {total.get('completion_tokens', 0):,}（其中推理 {total.get('reasoning_tokens', 0):,}）",
         f"　圖片 {total.get('image_tokens', 0):,}",
         f"　費用 ${total.get('cost', 0.0):.4f}",
     ]

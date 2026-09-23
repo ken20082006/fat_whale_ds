@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     model_vision: str = "deepseek/deepseek-chat"
     model_utility: str = "deepseek/deepseek-chat"
 
+    # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。
+    # 實測關掉後單次費用約降為四分之一，對一般閒聊毫無損失。
+    # 使用者可用 /think 個別開啟。
+    reasoning_enabled: bool = False
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")
@@ -46,8 +51,9 @@ class Settings(BaseSettings):
     compact_trigger_tokens: int = 3000
     summary_max_tokens: int = 400
     idle_reset_minutes: int = 120
-    private_reply_max_tokens: int = 1000
-    group_reply_max_tokens: int = 400
+    # max_tokens 是上限而非預留，設寬一點不會多花錢，但能避免推理吃掉額度後回傳空內容
+    private_reply_max_tokens: int = 3000
+    group_reply_max_tokens: int = 1500
     group_chain_max_messages: int = 20
     group_chain_max_tokens: int = 3000
     group_thread_ttl_minutes: int = 360

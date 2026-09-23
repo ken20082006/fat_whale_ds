@@ -92,6 +92,13 @@ class AccessControl:
             "UPDATE users SET vibe = ? WHERE tg_user_id = ?", (vibe, tg_user_id)
         )
 
+    async def set_reasoning(self, tg_user_id: int, enabled: bool | None) -> None:
+        """None 代表恢復跟隨全域設定。"""
+        await self._db.execute(
+            "UPDATE users SET reasoning = ? WHERE tg_user_id = ?",
+            (None if enabled is None else (1 if enabled else 0), tg_user_id),
+        )
+
     async def set_status(self, tg_user_id: int, status: str) -> None:
         await self._db.execute(
             "UPDATE users SET status = ? WHERE tg_user_id = ?", (status, tg_user_id)
