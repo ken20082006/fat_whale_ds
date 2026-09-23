@@ -1,0 +1,39 @@
+# 不用 Docker 時的 systemd 單元。
+# 安裝：
+#   sudo cp deploy/fatwhale.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fatwhale
+#   journalctl -u fatwhale -f
+
+[Unit]
+Description=Fat Whale DS Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=whale
+Group=whale
+WorkingDirectory=/opt/fatwhale
+
+ExecStart=/opt/fatwhale/.venv/bin/python -m dafeijing.main
+
+Restart=always
+RestartSec=10
+# 反覆崩潰時不要無限重試
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# 基本防護
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/fatwhale/data /opt/fatwhale/logs
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fatwhale
+
+[Install]
+WantedBy=multi-user.target

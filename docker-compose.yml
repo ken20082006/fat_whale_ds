@@ -1,0 +1,22 @@
+services:
+  fatwhale:
+    build: .
+    container_name: fatwhale
+    restart: unless-stopped
+
+    # 金鑰與設定。這個檔案不進版控。
+    env_file:
+      - .env
+
+    volumes:
+      - ./data:/app/data                       # SQLite
+      - ./logs:/app/logs                       # 日誌
+      - ./config/persona.md:/app/config/persona.md:ro   # 人設，不進映像檔
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # bot 不需要對外開埠，只用 long polling

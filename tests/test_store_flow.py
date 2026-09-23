@@ -1,0 +1,227 @@
+"""資料層的端到端流程：建庫、核發邀請碼、兌換、session 生命週期。
+
+不打網路、不需要 Telegram，用 asyncio.run 直接跑，省去 pytest-asyncio 依賴。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import tempfile
+from pathlib import Path
+
+from dafeijing.core.access import AccessControl, RedeemStatus
+from dafeijing.core.chain import ReplyChain
+from dafeijing.core.session import SessionManager
+from dafeijing.store.db import Database
+
+
+class FakeCfg:
+    window_turns = 4
+    compact_trigger_tokens = 10_000
+    summary_max_tokens = 200
+    idle_reset_minutes = 120
+    group_thread_ttl_minutes = 360
+    history_retention_days = 30
+    group_cache_retention_hours = 72
+    group_chain_max_messages = 20
+    group_chain_max_tokens = 3000
+
+
+async def _new_db(tmp: Path) -> Database:
+    db = Database(tmp / "test.db")
+    await db.connect()
+    return db
+
+
+def test_invite_redeem_flow():
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            access = AccessControl(db)
+
+            code = await access.issue_invite("小明", created_by=1, ttl_seconds=300)
+
+            assert not await access.is_active(99999)
+
+            first = await access.redeem(99999, code, "小明", "ming")
+            assert first.status is RedeemStatus.OK
+            assert await access.is_active(99999)
+
+            # 同一個人再兌換一次
+            again = await access.redeem(99999, code, "小明", "ming")
+            assert again.status is RedeemStatus.ALREADY_ACTIVE
+
+            # 同一張碼給別人用
+            other = await access.redeem(88888, code, "小華", "hua")
+            assert other.status in (RedeemStatus.ALREADY_BOUND, RedeemStatus.ALREADY_ACTIVE)
+            assert not await access.is_active(88888)
+
+            # 亂打的碼
+            bogus = await access.redeem(77777, "DFJ-AAAA-BBBB", "路人", None)
+            assert bogus.status is RedeemStatus.INVALID
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_invite_normalisation_and_expiry():
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            access = AccessControl(db)
+
+            code = await access.issue_invite("小美", created_by=1, ttl_seconds=300)
+            # 用各種手寫方式都應該兌換成功
+            loose = code.lower().replace("-", " ")
+            result = await access.redeem(55555, loose, "小美", None)
+            assert result.status is RedeemStatus.OK
+
+            expired_code = await access.issue_invite("過期的", created_by=1, ttl_seconds=-60)
+            expired = await access.redeem(44444, expired_code, "路人", None)
+            assert expired.status is RedeemStatus.EXPIRED
+
+            revoked_code = await access.issue_invite("要撤銷的", created_by=1, ttl_seconds=300)
+            assert await access.revoke_invite(revoked_code)
+            revoked = await access.redeem(33333, revoked_code, "路人", None)
+            assert revoked.status is RedeemStatus.REVOKED
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_group_whitelist():
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            access = AccessControl(db)
+
+            # 新群組預設未授權
+            assert await access.register_group(-100123, "測試群", added_by=1) is False
+            assert not await access.is_group_allowed(-100123)
+
+            assert await access.set_group_allowed(-100123, True)
+            assert await access.is_group_allowed(-100123)
+
+            assert await access.set_group_allowed(-100123, False)
+            assert not await access.is_group_allowed(-100123)
+
+            # 沒見過的群組改不動
+            assert not await access.set_group_allowed(-100999, True)
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_session_window_and_soft_reset():
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            session = await sessions.private_session(12345)
+            for turn in range(6):
+                await sessions.append(session.id, "user", f"問題 {turn}")
+                await sessions.append(session.id, "assistant", f"回答 {turn}")
+
+            window = await sessions.window(session.id)
+            assert len(window) == cfg.window_turns * 2  # 只留最近 N 輪
+            assert window[-1]["content"] == "回答 5"
+
+            # 軟重置：摘要留下，原文清空
+            await sessions.soft_reset(session.id, _fake_summarizer)
+
+            assert await sessions.window(session.id) == []
+            row = await db.fetchone("SELECT summary FROM sessions WHERE id = ?", (session.id,))
+            assert row["summary"] == "（摘要）"
+
+            # 硬重置：連摘要一起清掉
+            await sessions.hard_reset(session.id)
+            row = await db.fetchone("SELECT summary FROM sessions WHERE id = ?", (session.id,))
+            assert row["summary"] is None
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_undo_last_turn():
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+            session = await sessions.private_session(1)
+
+            await sessions.append(session.id, "user", "問題")
+            await sessions.append(session.id, "assistant", "回答")
+
+            assert await sessions.undo_last_turn(session.id) == 2
+            assert await sessions.window(session.id) == []
+            assert await sessions.undo_last_turn(session.id) == 0
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_long_term_notes():
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            await sessions.add_note(7, "使用者叫小明")
+            await sessions.add_note(7, "住在台北")
+            await sessions.add_note(8, "別人的筆記")
+
+            assert await sessions.notes(7) == ["使用者叫小明", "住在台北"]
+            assert await sessions.clear_notes(7) == 2
+            assert await sessions.notes(7) == []
+            assert await sessions.notes(8) == ["別人的筆記"]
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_group_reply_chain_resolution():
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            chain = ReplyChain(db, cfg)
+
+            # 1 → 2 → 3 的引用鏈
+            await chain.cache_message(-100, 1, None, 100, "甲", "第一句")
+            await chain.cache_message(-100, 2, 1, 101, "乙", "回第一句")
+            await chain.cache_message(-100, 3, 2, 102, "丙", "回第二句")
+
+            resolved = await chain.resolve(-100, 3)
+            assert [item["message_id"] for item in resolved] == [1, 2, 3]
+            assert resolved[0]["text"] == "第一句"
+
+            # 引用鏈中間斷掉時，能拿到多少算多少
+            await chain.cache_message(-100, 9, 404, 103, "丁", "引用不存在的訊息")
+            partial = await chain.resolve(-100, 9)
+            assert [item["message_id"] for item in partial] == [9]
+
+            # 格式化後應含發言者
+            text = chain.format_for_prompt(resolved, "大肥鯨")
+            assert "【甲】第一句" in text
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+async def _fake_summarizer(prompt: str) -> str:
+    return "（摘要）"

@@ -1,0 +1,23 @@
+# 虛擬環境
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 機密：金鑰與人設不進版控
+.env
+config/persona.md
+
+# 執行期資料
+data/
+logs/
+backups/
+*.db
+*.db-wal
+*.db-shm
+
+# 編輯器
+.idea/
+.vscode/
+.DS_Store
