@@ -81,61 +81,93 @@ def test_worth_extracting_accepts_substantive_text():
 
 # ── 群組：事實要歸給正確的人 ────────────────────────────
 
+BY_INDEX = {1: 100, 2: 200, 3: 300}
 BY_NAME = {normalise_name("甲"): 100, normalise_name("乙"): 200, normalise_name("Ken"): 300}
 
 
 def test_attributed_parsing_assigns_to_the_right_person():
-    raw = "甲｜正在學 Rust\n乙｜做後端，公司在台北"
-    facts = _parse_attributed(raw, BY_NAME, {})
+    raw = "1｜正在學 Rust\n2｜做後端，公司在台北"
+    facts = _parse_attributed(raw, BY_INDEX, BY_NAME, {})
 
     assert (100, "正在學 Rust") in facts
     assert (200, "做後端，公司在台北") in facts
 
 
 def test_attributed_accepts_halfwidth_pipe():
-    assert _parse_attributed("甲|喜歡貓", BY_NAME, {}) == [(100, "喜歡貓")]
+    assert _parse_attributed("1|喜歡貓", BY_INDEX, BY_NAME, {}) == [(100, "喜歡貓")]
 
 
 def test_attributed_strips_list_markers():
-    assert _parse_attributed("- 甲｜喜歡貓", BY_NAME, {}) == [(100, "喜歡貓")]
-    assert _parse_attributed("1. 甲｜喜歡貓", BY_NAME, {}) == [(100, "喜歡貓")]
+    assert _parse_attributed("- 1｜喜歡貓", BY_INDEX, BY_NAME, {}) == [(100, "喜歡貓")]
+    assert _parse_attributed("1. 2｜喜歡貓", BY_INDEX, BY_NAME, {}) == [(200, "喜歡貓")]
 
 
-def test_attributed_name_matching_ignores_case_and_spacing():
-    assert _parse_attributed("ken｜用 macOS", BY_NAME, {}) == [(300, "用 macOS")]
+def test_attributed_drops_unknown_index():
+    """編號不在名單上就整行丟掉。
 
-
-def test_attributed_drops_unknown_names():
-    """名字不在名單上就整行丟掉。
-
-    把關於甲的事記到乙頭上，比漏記更糟 —— 之後會用錯誤的記憶去回應。
+    把關於甲的事記到乙頭上，比漏記更糟 —— 之後會拿錯誤的記憶去回應。
     """
-    assert _parse_attributed("丙｜完全不在名單上", BY_NAME, {}) == []
+    assert _parse_attributed("9｜完全不在名單上", BY_INDEX, BY_NAME, {}) == []
 
 
-def test_attributed_drops_lines_without_a_name():
+def test_attributed_drops_lines_without_attribution():
     # 沒有分隔符的行無法歸屬，不能用「大概是講話的人」來猜
-    assert _parse_attributed("正在學 Rust", BY_NAME, {}) == []
+    assert _parse_attributed("正在學 Rust", BY_INDEX, BY_NAME, {}) == []
 
 
 def test_attributed_skips_known_facts():
     existing = {100: ["正在學 Rust"]}
-    assert _parse_attributed("甲｜正在學 Rust", BY_NAME, existing) == []
+    assert _parse_attributed("1｜正在學 Rust", BY_INDEX, BY_NAME, existing) == []
 
 
 def test_attributed_recognises_nothing_to_remember():
-    assert _parse_attributed("無", BY_NAME, {}) == []
-    assert _parse_attributed("（無）", BY_NAME, {}) == []
+    assert _parse_attributed("無", BY_INDEX, BY_NAME, {}) == []
+    assert _parse_attributed("（無）", BY_INDEX, BY_NAME, {}) == []
 
 
 def test_attributed_caps_results():
-    raw = "\n".join(f"甲｜事實 {i}" for i in range(10))
-    assert len(_parse_attributed(raw, BY_NAME, {})) == 3
+    raw = "\n".join(f"1｜事實 {i}" for i in range(10))
+    assert len(_parse_attributed(raw, BY_INDEX, BY_NAME, {})) == 3
 
 
 def test_attributed_does_not_merge_two_people():
     """同一段文字裡對兩個人的描述要分開，不能互相污染。"""
-    raw = "甲｜怕辣\n乙｜嗜辣"
-    facts = dict(_parse_attributed(raw, BY_NAME, {}))
+    raw = "1｜怕辣\n2｜嗜辣"
+    facts = dict(_parse_attributed(raw, BY_INDEX, BY_NAME, {}))
     assert facts[100] == "怕辣"
     assert facts[200] == "嗜辣"
+
+
+# ── 名字的退路（模型沒照格式走時）────────────────────────
+
+
+def test_falls_back_to_name_when_no_index():
+    assert _parse_attributed("甲｜怕辣", BY_INDEX, BY_NAME, {}) == [(100, "怕辣")]
+
+
+def test_name_fallback_ignores_case_and_spacing():
+    assert _parse_attributed("ken｜用 macOS", BY_INDEX, BY_NAME, {}) == [(300, "用 macOS")]
+
+
+def test_index_wins_over_name():
+    """兩者都寫時以編號為準 —— 編號才是可靠的那個。"""
+    raw = "2｜怕辣"
+    assert _parse_attributed(raw, BY_INDEX, BY_NAME, {}) == [(200, "怕辣")]
+
+
+def test_emoji_laden_name_is_dropped_not_misattributed():
+    """這正是改用編號的原因。
+
+    實際發生過：某人的顯示名稱是「🌼🙌🏻👋🏻👋🏻🐬🇭🇰（人可以無心，菜無惢會點…」，
+    模型無法可靠複述，於是挑了名單上第一個名字，事實就記到錯的人頭上。
+    寧可整行丟掉，也不要猜。
+    """
+    long_name = "🌼🙌🏻👋🏻👋🏻🐬🇭🇰（人可以無心，菜無惢會點"
+    raw = f"{long_name}｜用 Nikon Zf 影 fashion show"
+    # 不在 name 表裡 → 丟掉
+    assert _parse_attributed(raw, BY_INDEX, BY_NAME, {}) == []
+
+    # 但用編號就能正確歸屬
+    assert _parse_attributed("3｜用 Nikon Zf 影 fashion show", BY_INDEX, BY_NAME, {}) == [
+        (300, "用 Nikon Zf 影 fashion show")
+    ]

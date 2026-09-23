@@ -25,7 +25,15 @@ logger = logging.getLogger(__name__)
 _MARKER = re.compile(r"^\s*(?:[-•*]|\d+[.)])\s+")
 _NOTHING = re.compile(r"^[（(]?\s*[無无]\s*[）)]?[。.]?$")
 # 「名字｜事實」或「名字|事實」
-_ATTRIBUTED = re.compile(r"^\s*([^|｜]{1,40})\s*[|｜]\s*(.+?)\s*$")
+# 歸屬用編號，不用名字。
+#
+# 曾經用顯示名稱當鍵，結果壞掉：某人的名字是
+# 「🌼🙌🏻👋🏻👋🏻🐬🇭🇰（人可以無心，菜無惢會點...」，超長、全形、混大量 emoji，
+# 模型無法可靠複述，於是退而求其次挑了名單上第一個名字 —— 事實就記到錯的人頭上。
+# 編號沒有這個問題，模型不會把「3」寫成別的東西。
+_BY_INDEX = re.compile(r"^\s*(\d{1,3})\s*[|｜]\s*(.+?)\s*$")
+# 舊格式的退路：模型若還是寫了名字，仍然嘗試比對
+_BY_NAME = re.compile(r"^\s*([^|｜]{1,60})\s*[|｜]\s*(.+?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -71,7 +79,7 @@ _EXTRACT_GROUP = """\
 
 從下面這段對話裡，找出值得長期記住的事實，**並標明每一則是關於誰**。
 
-對話中出現的人（名字只能用這份名單裡的）：
+對話中出現的人（**只能用編號標明，不要寫名字**）：
 {people}
 
 值得記：
@@ -86,6 +94,8 @@ _EXTRACT_GROUP = """\
 - 助理自己說過的話
 - 任何推測或不確定的內容
 - 關於不在名單上的人的事
+- **對話中查到的通用知識或結論。** 例如「某鏡頭沒有出某接環」是相機常識，
+  不是任何人的個人資料。寫進去只會變成噪音 —— 筆記要記的是「這個人本身」
 
 **每則用一句話講完，寧可概括不要細節。**
 
@@ -96,8 +106,10 @@ _EXTRACT_GROUP = """\
 {exchange}
 
 若沒有新的、值得長期記住的事實，只回覆「無」。
-否則每行一則，格式固定為「名字｜事實」，名字必須取自上面那份名單。
-最多三則。不要編號、不要前言、不要解釋。
+否則每行一則，格式固定為「編號｜事實」，編號必須取自上面那份名單。
+例如：`2｜正在學 Rust`
+
+最多三則。不要寫名字、不要前言、不要解釋。
 """
 
 _CONSOLIDATE = """\
@@ -210,8 +222,11 @@ class MemoryExtractor:
         assistant_text: str,
         people: list[Person],
     ) -> list[tuple[int, str]]:
-        """群組模式：每一則事實都要標明是關於誰。"""
+        """群組模式：每一則事實都要標明是關於誰。用編號歸屬，不用名字。"""
+        indexed = list(enumerate(people, start=1))
+        by_index = {index: person.user_id for index, person in indexed}
         by_name = {normalise_name(person.name): person.user_id for person in people}
+
         existing = await self._sessions.notes_for(
             [person.user_id for person in people], scope
         )
@@ -224,7 +239,7 @@ class MemoryExtractor:
                 existing_lines.append(f"{name_of.get(user_id, user_id)}｜{note}")
 
         prompt = _EXTRACT_GROUP.format(
-            people="\n".join(f"- {person.name}" for person in people),
+            people="\n".join(f"{index}｜{person.name}" for index, person in indexed),
             existing="\n".join(f"- {line}" for line in existing_lines) or "（目前沒有）",
             exchange=(
                 f"對話內容：\n{truncate(user_text, 1500)}\n\n"
@@ -232,7 +247,7 @@ class MemoryExtractor:
             ),
         )
         raw = await self._llm.summarise(prompt, max_tokens=400)
-        return _parse_attributed(raw, by_name, existing)
+        return _parse_attributed(raw, by_index, by_name, existing)
 
     # ── 定期整理 ────────────────────────────────────────
 
@@ -271,14 +286,17 @@ class MemoryExtractor:
 
 def _parse_attributed(
     raw: str,
+    by_index: dict[int, int],
     by_name: dict[str, int],
     existing: dict[int, list[str]],
     limit: int = 3,
 ) -> list[tuple[int, str]]:
-    """解析「名字｜事實」。名字對不上名單就整行丟掉。
+    """解析「編號｜事實」，編號對不上就整行丟掉。
+
+    優先認編號；模型若仍寫了名字，才退回用名字比對。
 
     寧可漏記，也不要把關於甲的事記到乙頭上 —— 記錯比沒記更糟，
-    因為之後會用錯誤的記憶去回應。
+    因為之後會拿錯誤的記憶去回應，而使用者會以為它真的記得。
     """
     facts: list[tuple[int, str]] = []
 
@@ -287,17 +305,29 @@ def _parse_attributed(
         if not cleaned or _NOTHING.match(cleaned):
             continue
 
-        match = _ATTRIBUTED.match(cleaned)
-        if match is None:
-            logger.debug("群組抽取：忽略沒有標明對象的行：%s", cleaned[:40])
-            continue
+        user_id: int | None = None
+        fact = ""
 
-        user_id = by_name.get(normalise_name(match.group(1)))
-        if user_id is None:
-            logger.debug("群組抽取：名字不在名單上，略過：%s", match.group(1)[:20])
-            continue
+        numbered = _BY_INDEX.match(cleaned)
+        if numbered is not None:
+            user_id = by_index.get(int(numbered.group(1)))
+            fact = numbered.group(2).strip()
+            if user_id is None:
+                logger.debug("群組抽取：編號不在名單上，略過：%s", cleaned[:40])
+                continue
+        else:
+            named = _BY_NAME.match(cleaned)
+            if named is None:
+                logger.debug("群組抽取：忽略無法歸屬的行：%s", cleaned[:40])
+                continue
+            user_id = by_name.get(normalise_name(named.group(1)))
+            fact = named.group(2).strip()
+            if user_id is None:
+                # 名字太長、含 emoji、或模型複述得不精確時會落到這裡。
+                # 這正是編號存在的理由。
+                logger.debug("群組抽取：名字對不上，略過：%s", named.group(1)[:30])
+                continue
 
-        fact = match.group(2).strip()
         if not fact or len(fact) > 200:
             continue
         if fact in existing.get(user_id, []):
