@@ -17,7 +17,13 @@ from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
 from .util import today_text
-from .webfetch import extract_search_marker, fetch_all, find_urls, wants_search
+from .webfetch import (
+    extract_search_marker,
+    fetch_all,
+    find_urls,
+    strip_citations,
+    wants_search,
+)
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
@@ -215,6 +221,11 @@ class ChatService:
         # 先把標記拿掉 —— 那是給系統看的，不能留在訊息裡。
         # 模型有可能在第二次仍然輸出搜尋標記，所以兩種都清。
         result.text, _ = extract_search_marker(result.text)
+
+        # 清掉來源標註。那是搜尋外掛的預設行為（要模型標出處），
+        # 提示裡雖然已經叫它不要標，模型不一定每次都聽，所以在輸出端再清一次。
+        result.text = strip_citations(result.text)
+
         result.text = result.text or "本鯨查完之後不知道該說什麼，再問一次好嗎。"
         cleaned, sticker_index = extract_marker(result.text)
         result.text = cleaned

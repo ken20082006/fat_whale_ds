@@ -119,6 +119,35 @@ def extract_search_marker(text: str) -> tuple[str, str | None]:
     return cleaned, query or None
 
 
+# 來源標註的殘留。外掛的 search_prompt 已經叫模型不要標，但模型不一定每次都聽，
+# 所以輸出端再清一次。格式是它的特殊寫法：`(mashable.com (https://...))`
+_CITATION_NESTED = re.compile(
+    r"\(\s*[\w.-]+\.[a-z]{2,}(?:/\S*)?\s*\(\s*https?://[^\s)]+\s*\)\s*\)", re.I
+)
+_CITATION_PLAIN = re.compile(r"\(\s*[\w.-]+\.[a-z]{2,}(?:/\S*)?\s*\)", re.I)
+_MD_LINK = re.compile(r"\[([^\]\n]+)\]\(\s*https?://[^\s)]+\s*\)")
+
+
+def strip_citations(text: str) -> str:
+    """清掉來源標註，但保留一般連結的文字。
+
+    `[官方文件](https://…)` 會變成「官方文件」而不是整段消失 ——
+    那可能是模型想表達的內容，只是不該以連結形式出現。
+    """
+    if not text:
+        return text
+
+    cleaned = _CITATION_NESTED.sub("", text)
+    cleaned = _MD_LINK.sub(r"\1", cleaned)
+    cleaned = _CITATION_PLAIN.sub("", cleaned)
+
+    # 清完常留下多餘空白與空行
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" +([，。、；：！？])", r"\1", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def wants_search(text: str, mode: str = "auto") -> bool:
     """這則訊息該不該去網上查。
 

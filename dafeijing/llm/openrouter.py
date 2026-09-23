@@ -94,6 +94,12 @@ class OpenRouterClient:
                 "id": "web",
                 "engine": self._cfg.search_engine,
                 "max_results": self._cfg.search_max_results,
+                # 外掛的預設指示會要模型標出來源（格式像 `(網域 (網址))`），
+                # 那是它的預設行為，不是模型自己愛貼。這裡直接覆蓋掉。
+                "search_prompt": (
+                    "根據以下搜尋結果回答問題。"
+                    "不要輸出網址、來源連結或出處標註，直接陳述事實即可。"
+                ),
             }
             if self._cfg.search_engine_mode:
                 plugin["mode"] = self._cfg.search_engine_mode

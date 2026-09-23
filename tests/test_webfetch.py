@@ -6,8 +6,56 @@ from dafeijing.core.webfetch import (
     extract,
     extract_search_marker,
     find_urls,
+    strip_citations,
     wants_search,
 )
+
+
+# ── 來源標註的清理 ──────────────────────────────────────
+
+
+def test_strips_the_plugin_citation_format():
+    """搜尋外掛的預設標註格式是 `(網域 (網址))`。"""
+    text = "第一代產品通常伏味最濃 (mashable.com (https://mashable.com/tech/x))。"
+    assert strip_citations(text) == "第一代產品通常伏味最濃。"
+
+
+def test_strips_plain_domain_in_parens():
+    assert strip_citations("價錢約 $999 (apple.com)") == "價錢約 $999"
+    assert strip_citations("已經落架 (livemint.com/news/y)") == "已經落架"
+
+
+def test_markdown_link_keeps_its_text():
+    """保留連結文字 —— 那可能是模型想表達的內容，只是不該以連結形式出現。"""
+    assert strip_citations("參考 [官方文件](https://example.com/doc) 寫的") == (
+        "參考 官方文件 寫的"
+    )
+
+
+def test_bare_url_is_left_alone():
+    """裸網址通常是對方明確要連結時才出現，不該自動刪。"""
+    text = "詳見 https://example.com/bare"
+    assert strip_citations(text) == text
+
+
+def test_plain_text_untouched():
+    assert strip_citations("普通回覆，冇任何連結") == "普通回覆，冇任何連結"
+    assert strip_citations("") == ""
+
+
+def test_removes_leftover_whitespace():
+    text = "答案在這裡 (a.com (https://a.com/x)) 。"
+    cleaned = strip_citations(text)
+    assert "  " not in cleaned
+    assert " 。" not in cleaned
+
+
+def test_handles_multiple_citations():
+    text = "第一點 (a.com (https://a.com/1))。第二點 (b.com (https://b.com/2))。"
+    cleaned = strip_citations(text)
+    assert "a.com" not in cleaned
+    assert "b.com" not in cleaned
+    assert "第一點" in cleaned and "第二點" in cleaned
 
 
 # ── 模型自主要求搜尋 ────────────────────────────────────
