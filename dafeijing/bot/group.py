@@ -17,9 +17,11 @@ from telegram import MessageEntity, Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
+from ..core.chain import normalise_name
 from ..core.chat import ChatRequest
 from ..core.debounce import MAX_IMAGES
 from ..core.media import MediaError, PreparedImage, prepare_from_telegram
+from ..core.memory import Person
 from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
@@ -208,6 +210,9 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
     root_id = chain[0]["message_id"] if chain else message.message_id
     chain_text = svc.chain.format_for_prompt(chain, svc.bot_name)
 
+    # 引用串解出來才知道有哪些人發言，所以放在這裡
+    people, mentioned = await _collect_people(message, chain, svc)
+
     # 串裡出現過的圖片也要真的抓下來。只給「〔圖片〕」這種文字標註的話，
     # 對方引用的圖等於沒被看到。
     chain_images = await _gather_chain_media(
@@ -230,6 +235,8 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         chain_text=chain_text or None,
         chain_messages=chain,
         images=images,
+        people=people,
+        mentioned=mentioned,
     )
 
     try:
@@ -278,6 +285,64 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
                 media_file_id=outcome.sticker_file_id,
                 media_source="sticker",
             )
+
+
+async def _collect_people(
+    message, chain: list[dict], svc: Services
+) -> tuple[list[Person], list[Person]]:
+    """回傳 (這一串出現過的人, 這則訊息 @ 到的人)。
+
+    名單必須包含「被提到但還沒發言」的人 —— 甲可以 @ 一個沒講過話的乙，
+    然後開始講關於乙的事，那些事實要記在乙頭上而不是甲。
+    """
+    people: dict[int, str] = {}
+    mentioned: dict[int, str] = {}
+
+    # 先看這一串有哪些人發言
+    for item in chain:
+        user_id = item.get("user_id")
+        name = (item.get("display_name") or "").strip()
+        if user_id and name and user_id != svc.bot_id:
+            people.setdefault(user_id, name)
+
+    # 再看這則訊息 @ 了誰。已在上面的不會被覆蓋，以實際發言的名字為準。
+    handles = _mentioned_names(message, svc.bot_username)
+    if handles:
+        roster = await svc.chain.roster(message.chat_id)
+        for handle in handles:
+            user_id = roster.get(normalise_name(handle))
+            if not user_id or user_id == svc.bot_id:
+                continue
+            name = people.get(user_id, handle)
+            people.setdefault(user_id, name)
+            mentioned[user_id] = name
+
+    return (
+        [Person(user_id=uid, name=name) for uid, name in people.items()],
+        [Person(user_id=uid, name=name) for uid, name in mentioned.items()],
+    )
+
+
+def _mentioned_names(message, bot_username: str) -> list[str]:
+    """取出這則訊息 @ 到的名字。
+
+    MENTION 只給帳號名，要再查名冊才知道是誰；TEXT_MENTION 直接帶 user 物件。
+    """
+    body = message.text or message.caption or ""
+    target = (bot_username or "").lower()
+    names: list[str] = []
+
+    for entity in message.entities or message.caption_entities or []:
+        if entity.type == MessageEntity.TEXT_MENTION and entity.user is not None:
+            label = entity.user.full_name or entity.user.username or ""
+            if label:
+                names.append(label)
+        elif entity.type == MessageEntity.MENTION:
+            handle = body[entity.offset : entity.offset + entity.length].lstrip("@")
+            if handle and handle.lower() != target:
+                names.append(handle)
+
+    return names
 
 
 async def _gather_chain_media(

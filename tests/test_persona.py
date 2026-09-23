@@ -96,6 +96,24 @@ def test_notes_and_summary_are_included():
     assert "先前聊過排版問題" in prompt
 
 
+def test_others_notes_are_included_and_marked_as_reference():
+    prompt = Persona("角色").build(
+        PersonaContext(
+            is_group=True,
+            others_notes=[("乙", ["做後端", "公司在台北"])],
+        )
+    )
+    assert "### 其他人的筆記" in prompt
+    assert "【乙】" in prompt
+    assert "做後端" in prompt
+    # 要明講那是背景不是報告，否則模型會把整份筆記唸出來
+    assert "不是給對方看的報告" in prompt
+
+
+def test_others_notes_omitted_when_empty():
+    assert "其他人的筆記" not in Persona("角色").build(PersonaContext(is_group=True))
+
+
 def test_empty_notes_and_summary_are_omitted():
     prompt = Persona("角色").build(PersonaContext())
     assert "長期記憶" not in prompt

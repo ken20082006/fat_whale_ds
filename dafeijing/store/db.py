@@ -27,6 +27,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("group_cache", "media_source", "TEXT"),
     ("stickers", "file_id", "TEXT"),
     ("stickers", "featured", "INTEGER NOT NULL DEFAULT 0"),
+    ("group_cache", "username", "TEXT"),
 )
 
 

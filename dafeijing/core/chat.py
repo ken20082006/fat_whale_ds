@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from ..llm.openrouter import LLMResult, OpenRouterClient
 from .access import AccessControl
 from .media import PreparedImage
-from .memory import MemoryExtractor
+from .memory import MemoryExtractor, Person
 from .persona import Persona, PersonaContext
 from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
@@ -21,6 +21,10 @@ from .webfetch import fetch_all, find_urls, wants_search
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
+
+# 一次最多帶幾個人的筆記進提示。帶太多會讓 system prompt 暴漲，
+# 而且「一次問三個人的事」本來就少見。
+MAX_MENTIONED_NOTES = 3
 
 
 @dataclass
@@ -35,6 +39,10 @@ class ChatRequest:
     chain_messages: list[dict] | None = None
     images: list[PreparedImage] = field(default_factory=list)
     force_search: bool = False
+    # 群組限定：這一串裡出現過的人。抽取時用來把事實歸給正確的人。
+    people: list[Person] | None = None
+    # 這則訊息 @ 到的人。他們在同一場合的筆記會被帶進提示，好回答「乙怎樣怎樣」。
+    mentioned: list[Person] | None = None
 
 
 @dataclass
@@ -84,6 +92,17 @@ class ChatService:
         scope = scope_for(req.is_group, req.chat_id)
         notes = await self._sessions.notes(req.tg_user_id, scope)
 
+        # 被 @ 到的人，他們在同一場合的筆記也要帶上 —— 否則甲問「乙在做什麼」
+        # 時，助理手上只有甲的筆記，答不出來。這些筆記與甲自己的同屬一個場合，
+        # 可見範圍一樣，沒有額外揭露。
+        others_notes: list[tuple[str, list[str]]] = []
+        for person in (req.mentioned or [])[:MAX_MENTIONED_NOTES]:
+            if person.user_id == req.tg_user_id:
+                continue
+            other = await self._sessions.notes(person.user_id, scope)
+            if other:
+                others_notes.append((person.name, other))
+
         system_prompt = self._persona.build(
             PersonaContext(
                 vibe=vibe,
@@ -95,6 +114,7 @@ class ChatService:
                 today=today_text(
                     self._cfg.timezone_offset_hours, self._cfg.timezone_label
                 ),
+                others_notes=others_notes,
             )
         )
 
@@ -212,6 +232,7 @@ class ChatService:
             scope=scope,
             user_text=req.text or base_text,
             assistant_text=result.text,
+            people=req.people,
         )
 
         logger.info(

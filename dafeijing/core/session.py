@@ -337,6 +337,25 @@ class SessionManager:
             (tg_user_id, scope),
         )
 
+    async def notes_for(
+        self, tg_user_ids: list[int], scope: str, limit: int = 20
+    ) -> dict[int, list[str]]:
+        """一次取多個人在同一場合的筆記。群組抽取時要拿整串發言者的既有筆記來比對。"""
+        if not tg_user_ids:
+            return {}
+        placeholders = ",".join("?" for _ in tg_user_ids)
+        rows = await self._db.fetchall(
+            f"SELECT user_id, content FROM memory_notes "
+            f"WHERE scope = ? AND user_id IN ({placeholders}) ORDER BY id",
+            (scope, *tg_user_ids),
+        )
+        grouped: dict[int, list[str]] = {}
+        for row in rows:
+            bucket = grouped.setdefault(row["user_id"], [])
+            if len(bucket) < limit:
+                bucket.append(row["content"])
+        return grouped
+
     async def note_counts(self, tg_user_id: int) -> list[tuple[str, int]]:
         """各場合的筆記數量，供 /context 顯示。"""
         rows = await self._db.fetchall(

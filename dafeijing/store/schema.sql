@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS group_cache (
     reply_to_id   INTEGER,
     user_id       INTEGER,
     display_name  TEXT,
+    username      TEXT,                                 -- 供解析 @username 對應到誰
     text          TEXT,
     has_media     INTEGER NOT NULL DEFAULT 0,
     media_file_id TEXT,

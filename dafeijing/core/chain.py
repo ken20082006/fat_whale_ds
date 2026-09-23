@@ -38,18 +38,20 @@ class ReplyChain:
         has_media: bool = False,
         media_file_id: str | None = None,
         media_source: str | None = None,
+        username: str | None = None,
     ) -> None:
         await self._db.execute(
             "INSERT OR REPLACE INTO group_cache "
-            "(chat_id, message_id, reply_to_id, user_id, display_name, text, has_media, "
-            "media_file_id, media_source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(chat_id, message_id, reply_to_id, user_id, display_name, username, text, "
+            "has_media, media_file_id, media_source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 message_id,
                 reply_to_id,
                 user_id,
                 display_name,
+                username,
                 text or "",
                 1 if has_media else 0,
                 media_file_id,
@@ -65,8 +67,10 @@ class ReplyChain:
 
         sender = message.from_user
         display_name = None
+        username = None
         if sender is not None:
             display_name = sender.full_name or sender.username
+            username = sender.username
 
         text = message.text or message.caption
         has_media = False
@@ -88,6 +92,7 @@ class ReplyChain:
             has_media=has_media,
             media_file_id=picked[0] if picked else None,
             media_source=picked[1] if picked else None,
+            username=username,
         )
 
     async def purge(self) -> int:
@@ -173,6 +178,27 @@ class ReplyChain:
             return head + [marker] + tail
         return chain
 
+    async def roster(self, chat_id: int) -> dict[str, int]:
+        """這個群組裡出現過的稱呼 → user_id。
+
+        兩個用途：把抽取出來的事實歸到正確的人，以及解析 @ 提到的是誰。
+        只用 group_cache —— 那是這個群組實際發生過的對話，比另外維護一份名冊可靠。
+        """
+        rows = await self._db.fetchall(
+            "SELECT user_id, display_name, username FROM group_cache "
+            "WHERE chat_id = ? AND user_id IS NOT NULL",
+            (chat_id,),
+        )
+
+        mapping: dict[str, int] = {}
+        for row in rows:
+            user_id = row["user_id"]
+            for raw in (row["display_name"], row["username"]):
+                key = normalise_name(raw)
+                if key:
+                    mapping.setdefault(key, user_id)
+        return mapping
+
     @staticmethod
     def format_for_prompt(chain: list[dict], bot_name: str) -> str:
         """把引用串排成模型看得懂的結構。"""
@@ -193,3 +219,10 @@ class ReplyChain:
         lines.append(f"（{bot_name} 是被指名回應的那一方）")
         lines.append("[引用串結束]")
         return "\n".join(lines)
+
+
+def normalise_name(raw: str | None) -> str:
+    """比對用的正規化。大小寫與空白不該影響能不能認出同一個人。"""
+    if not raw:
+        return ""
+    return "".join(raw.split()).lower()
