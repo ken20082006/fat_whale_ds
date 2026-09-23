@@ -80,6 +80,7 @@ class PersonaContext:
     summary: str | None = None
     is_group: bool = False
     sticker_menu: str | None = None
+    today: str | None = None
 
 
 class Persona:
@@ -134,6 +135,13 @@ class Persona:
         blocks.append(f"\n### 演出濃度\n{VIBE_INSTRUCTIONS[vibe]}\n")
 
         blocks.append(f"\n### 對話對象\n{ctx.display_name or '（未知）'}\n")
+
+        if ctx.today:
+            blocks.append(
+                f"\n### 今天\n{ctx.today}\n"
+                "你的訓練資料有截止日期，日期之後發生的事你不知道 —— 對方問到那之後的事，"
+                "或者答案可能已經變了，就直說你需要查，不要憑印象講。\n"
+            )
 
         blocks.append("\n### 場合\n")
         if ctx.is_group:

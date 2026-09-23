@@ -51,7 +51,7 @@ _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 #
 # 刻意避開單獨一個「查」字（查字典、查錯、查詢餘額都會誤中），
 # 只認成組的講法。
-_SEARCH_HINTS = re.compile(
+_EXPLICIT_HINTS = re.compile(
     r"("
     r"上網\s*(查|搵|找|搜|看|search)|"
     r"網上\s*(查|搵|找|搜)|"
@@ -61,11 +61,32 @@ _SEARCH_HINTS = re.compile(
     r"(?<![檢調審])查一下|(?<![檢調審])查下|(?<![檢調審])查一查|(?<![檢調審])查查|"
     r"搵下|搵吓|搵一搵|"
     r"google|谷歌|"
-    r"\bsearch\b|\blook\s+up\b|\bfind\s+online\b|\bweb\s+search\b|"
-    r"最新(消息|情況|版本|新聞)|即時新聞|最近點"
+    r"\bsearch\b|\blook\s+up\b|\bfind\s+online\b|\bweb\s+search\b"
     r")",
     re.I,
 )
+
+# 沒明講要查，但答案可能隨時間改變，或本來就查一下比較準。
+#
+# 刻意避開「最近」「現在」這類單獨出現也很常見的詞 —— 「我最近很累」不是在
+# 問時事。寧可漏，不要每句閒聊都去搜。
+_CONTEXTUAL_HINTS = re.compile(
+    r"("
+    r"最新(消息|情況|版本|新聞)?|即時新聞|最近點|"
+    r"新版|新版本|更新咗|出咗未|出咗啦|發布|推出|上市|"
+    r"幾時出|幾時有|邊時出|幾錢|幾多錢|價格|價錢|售價|"
+    r"新聞|消息|股價|匯率|天氣|颱風|"
+    r"版本|release|release note|changelog|roadmap|"
+    r"\bupdate\b|\blatest\b|\bcurrent\b|\brecent\b|"
+    r"202[0-9]\s*年|"
+    r"而家有咩|依家有咩|宜家有咩|有咩新"
+    r")",
+    re.I,
+)
+
+# 搜尋模式：off 不搜；trigger 只認明講的；auto 加上情境判斷；always 每則都搜。
+SEARCH_MODES = ("off", "trigger", "auto", "always")
+DEFAULT_SEARCH_MODE = "auto"
 
 
 @dataclass(frozen=True)
@@ -79,9 +100,22 @@ class FetchedPage:
         return f"<網頁 url=\"{self.url}\" title=\"{self.title}\">\n{self.text}\n</網頁>"
 
 
-def wants_search(text: str) -> bool:
-    """對方是不是在叫我上網查。"""
-    return bool(_SEARCH_HINTS.search(text or ""))
+def wants_search(text: str, mode: str = "auto") -> bool:
+    """這則訊息該不該去網上查。
+
+    mode 決定積極程度，見 SEARCH_MODES。
+    """
+    if mode == "off":
+        return False
+    if mode == "always":
+        return True
+    if not text:
+        return False
+    if _EXPLICIT_HINTS.search(text):
+        return True
+    if mode == "trigger":
+        return False
+    return bool(_CONTEXTUAL_HINTS.search(text))
 
 
 def find_urls(text: str) -> list[str]:

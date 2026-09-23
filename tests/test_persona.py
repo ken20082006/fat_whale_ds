@@ -24,6 +24,18 @@ def test_media_rule_keeps_the_explicit_request_exception():
     assert "明確要你看圖" in prompt
 
 
+def test_today_is_included_when_given():
+    prompt = Persona("角色").build(PersonaContext(today="2026 年 09 月 23 日 星期三"))
+    assert "### 今天" in prompt
+    assert "2026 年 09 月 23 日" in prompt
+    # 要明講訓練資料有截止日期，否則模型會憑印象答時效性問題
+    assert "訓練資料有截止日期" in prompt
+
+
+def test_today_omitted_when_not_given():
+    assert "### 今天" not in Persona("角色").build(PersonaContext())
+
+
 def test_security_rule_is_present():
     prompt = Persona("角色").build(PersonaContext())
     assert "### 安全界線" in prompt

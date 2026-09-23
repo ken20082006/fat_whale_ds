@@ -19,6 +19,22 @@ def now_iso() -> str:
     return now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_WEEKDAYS = "一二三四五六日"
+
+
+def today_text(offset_hours: int, label: str = "") -> str:
+    """給模型看的「今天」。
+
+    刻意只到「日」不含時刻：這段文字會進 system prompt，而那是快取前綴。
+    帶上分鐘的話每一分鐘都變，快取等於完全失效；只帶日期則一天失效一次。
+    """
+    tz = timezone(timedelta(hours=offset_hours))
+    moment = datetime.now(tz)
+    weekday = _WEEKDAYS[moment.weekday()]
+    suffix = f"（{label}）" if label else ""
+    return f"{moment.strftime('%Y 年 %m 月 %d 日')} 星期{weekday}{suffix}"
+
+
 def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 

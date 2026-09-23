@@ -38,18 +38,28 @@ class Settings(BaseSettings):
     reasoning_enabled: bool = False
 
     # ── 聯網 ──
-    # 由 OpenRouter 代為搜尋。對方說「上網查」「search 一下」之類就會啟用，
-    # 也可以直接叫他讀某個連結。
-    search_enabled: bool = True
+    # 搜尋積極程度：
+    #   off      完全不搜
+    #   trigger  只認明講的（「上網查」「search 一下」）
+    #   auto     加上情境判斷（時間敏感、版本、價格之類）
+    #   always   每則都搜（最準但也最慢，且會搜「你好」這種）
+    search_mode: str = "auto"
     # 實測同一題的費用：exa $0.0083、parallel $0.0057、parallel+turbo $0.0018、
     # parallel+fast $0.0013。預設選最便宜的組合，品質實測沒有明顯差異。
     # exa 是 DeepSeek 這類非原生模型的官方預設，若覺得品質不穩可以改回去。
     search_engine: str = "parallel"
-    # 引擎分級。fast 對 exa 與 parallel 都有效；留空則用引擎預設（較貴）。
-    search_mode: str = "fast"
+    # 引擎自身的分級，與上面的 search_mode 是兩回事 ——
+    # 前者決定「引擎怎麼搜」，後者決定「什麼時候搜」。
+    # fast 對 exa 與 parallel 都有效；留空則用引擎預設（較貴）。
+    search_engine_mode: str = "fast"
     search_max_results: int = 5
     # 一則訊息最多讀幾個對方貼的連結
     fetch_max_urls: int = 3
+
+    # 告訴模型「今天」是哪一天。用它才判斷得出「最新」是相對什麼時候。
+    # 香港沒有日光節約，固定位移即可，不需要 tzdata。
+    timezone_offset_hours: int = 8
+    timezone_label: str = "香港時間"
 
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")

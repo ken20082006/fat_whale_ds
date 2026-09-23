@@ -95,8 +95,8 @@ class OpenRouterClient:
                 "engine": self._cfg.search_engine,
                 "max_results": self._cfg.search_max_results,
             }
-            if self._cfg.search_mode:
-                plugin["mode"] = self._cfg.search_mode
+            if self._cfg.search_engine_mode:
+                plugin["mode"] = self._cfg.search_engine_mode
             payload["plugins"] = [plugin]
 
         data = await self._post(payload)

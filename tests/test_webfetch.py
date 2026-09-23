@@ -40,6 +40,49 @@ def test_does_not_fire_on_bare_cha():
     assert not wants_search("檢查一下程式碼")
 
 
+def test_contextual_hints_fire_without_explicit_request():
+    """沒明講要查，但答案會隨時間改變。"""
+    for phrase in (
+        "DeepSeek 最新版本係咩",
+        "呢個套件幾時出 2.0",
+        "比特幣而家幾錢",
+        "台灣今日天氣點",
+        "Rust 1.90 有咩新功能",
+        "2026 年有咩大事",
+        "what is the latest version of httpx",
+    ):
+        assert wants_search(phrase), phrase
+
+
+def test_contextual_does_not_fire_on_small_talk():
+    """「最近」「現在」這類詞單獨出現很常見，刻意不收，免得每句閒聊都去搜。"""
+    for phrase in (
+        "我最近很累",
+        "我現在不想工作",
+        "今日心情唔錯",
+        "幫我寫一個 quicksort",
+        "解釋一下遞迴",
+        "這個函式為什麼會出錯",
+    ):
+        assert not wants_search(phrase), phrase
+
+
+def test_mode_off_never_searches():
+    assert not wants_search("上網查一下", mode="off")
+    assert not wants_search("最新版本係咩", mode="off")
+
+
+def test_mode_trigger_ignores_contextual():
+    assert wants_search("上網查一下", mode="trigger")
+    # 情境判斷在 trigger 模式下不生效
+    assert not wants_search("DeepSeek 最新版本係咩", mode="trigger")
+
+
+def test_mode_always_always_searches():
+    assert wants_search("你好", mode="always")
+    assert wants_search("", mode="always")
+
+
 def test_bang_wo_cha_does_fire():
     """「幫我查 X」保留為觸發詞。
 

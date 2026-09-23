@@ -16,6 +16,7 @@ from .persona import Persona, PersonaContext
 from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
+from .util import today_text
 from .webfetch import fetch_all, find_urls, wants_search
 from .usage import UsageLog
 
@@ -91,22 +92,37 @@ class ChatService:
                 summary=req.session.summary,
                 is_group=req.is_group,
                 sticker_menu=self._stickers.menu() if self._stickers.available else None,
+                today=today_text(
+                    self._cfg.timezone_offset_hours, self._cfg.timezone_label
+                ),
             )
         )
 
         base_text = req.chain_text or req.text
+        trigger_text = req.text or ""
 
-        # 對方貼了連結就讀進來。抓回來的內容是外部文字，包成資料區塊送出去，
-        # 但它不落庫 —— 存進對話歷史會讓每一輪都背著整頁網頁，成本會失控。
+        # 連結連同被引用的那一則一起看 ——「引用一條連結再 @ 它」是常見用法。
+        url_source = trigger_text
+        if req.chain_messages and len(req.chain_messages) >= 2:
+            parent = req.chain_messages[-2].get("text") or ""
+            url_source = f"{trigger_text}\n{parent}"
+
+        # 抓回來的內容是外部文字，包成資料區塊送出去，但不落庫 ——
+        # 存進對話歷史會讓每一輪都背著整頁網頁，成本會失控。
         page_blocks: list[str] = []
         if self._cfg.fetch_max_urls > 0:
-            pages = await fetch_all(find_urls(base_text), limit=self._cfg.fetch_max_urls)
+            pages = await fetch_all(find_urls(url_source), limit=self._cfg.fetch_max_urls)
             if pages:
                 page_blocks = [page.as_block() for page in pages]
                 self.fetched_pages += len(pages)
 
-        # 意圖靠關鍵詞偵測；/search 是偵測失手時的保險。
-        search = self._cfg.search_enabled and (wants_search(base_text) or req.force_search)
+        # 搜尋意圖只看「對方自己這一句」。
+        #
+        # 群組的 base_text 是整條引用串，若拿它來判斷，串裡任何一個人提到
+        # 「最新」或「版本」都會觸發搜尋 —— 等於替整個群組查，而且是替
+        # 別人講過的話查。判斷依據必須是當下這一句。
+        mode = self._cfg.search_mode
+        search = wants_search(trigger_text, mode) or (req.force_search and mode != "off")
         if search:
             self.web_searches += 1
 
