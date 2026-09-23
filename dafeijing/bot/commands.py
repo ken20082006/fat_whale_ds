@@ -22,11 +22,22 @@ VALID_VIBES = ("low", "mid", "high")
 
 
 def _current_scope(update: Update) -> str:
-    return scope_for(update.effective_chat.type != ChatType.PRIVATE)
+    chat = update.effective_chat
+    return scope_for(chat.type != ChatType.PRIVATE, chat.id)
 
 
-def _scope_label(scope: str) -> str:
-    return "私聊" if scope == PRIVATE_SCOPE else "群組（全部共用）"
+async def _scope_label(svc: Services, scope: str) -> str:
+    """把 scope 轉成看得懂的名字。群組 id 對人沒有意義，所以查標題。"""
+    if scope == PRIVATE_SCOPE:
+        return "私聊"
+    try:
+        chat_id = int(scope.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return scope
+    title = await svc.db.fetchval(
+        "SELECT title FROM groups WHERE chat_id = ?", (chat_id,), default=None
+    )
+    return f"群組「{title}」" if title else f"群組 {chat_id}"
 
 
 def _reasoning_label(value: int | None) -> str:
@@ -234,9 +245,9 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # 各場合分開存，讓使用者看得見分布
     others = [(scope, n) for scope, n in counts if scope != PRIVATE_SCOPE]
     if others:
-        lines.append("\n群組筆記（所有群組共用一份，私聊的不會流過去）：")
+        lines.append("\n群組筆記（每個群組各自獨立，也與私聊隔開）：")
         for scope, count in others:
-            lines.append(f"  · {_scope_label(scope)} — {count} 則")
+            lines.append(f"  · {await _scope_label(svc, scope)} — {count} 則")
 
     await update.effective_message.reply_text("\n".join(lines))
 
@@ -341,9 +352,9 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     scope = _current_scope(update)
     removed = await svc.sessions.clear_notes(user.id, scope)
-    where = _scope_label(scope)
+    where = await _scope_label(svc, scope)
     await update.effective_message.reply_text(
-        f"清掉{where}的 {removed} 則筆記。\n另一個場合的筆記還在，要一起清就用 /forget all。"
+        f"清掉{where}的 {removed} 則筆記。\n其他場合的筆記還在，要一起清就用 /forget all。"
         if removed
         else f"{where}本來就沒有筆記。"
     )

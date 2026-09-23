@@ -49,21 +49,14 @@ class Database:
 
     async def _migrate_data(self) -> None:
         """一次性資料搬移。每項都要能重複執行而不出錯。"""
-        # 舊版的長期筆記以 'group:<chat_id>' 一個群組一份，
-        # 現在改成所有群組共用一份。
-        merged = await self.affect(
-            "UPDATE memory_notes SET scope = 'group' WHERE scope LIKE 'group:%'"
-        )
-        if merged:
-            logger.info("長期筆記場合合併：%d 則改為群組共用", merged)
-
-            # 合併後同一個人可能在不同群組記過同一件事，去重
-            removed = await self.affect(
-                "DELETE FROM memory_notes WHERE id NOT IN ("
-                "SELECT MIN(id) FROM memory_notes GROUP BY user_id, scope, content)"
+        # 曾經有一個版本把所有群組筆記合併成單一的 'group'，
+        # 那份資料已經失去「來自哪個群組」的資訊，無法還原成分群組的狀態。
+        # 留著會變成跨群組洩漏，所以清掉；記憶會從之後的對話重新累積。
+        orphaned = await self.affect("DELETE FROM memory_notes WHERE scope = 'group'")
+        if orphaned:
+            logger.warning(
+                "清除 %d 則無法歸屬的群組筆記（來自已廢棄的合併版本）", orphaned
             )
-            if removed:
-                logger.info("長期筆記去重：移除 %d 則重複", removed)
 
     async def _add_missing_columns(self) -> None:
         """既有的資料庫不會因為新增欄位而重建，這裡補上缺的。

@@ -256,7 +256,12 @@ class AccessControl:
     # ── 群組白名單 ──────────────────────────────────────
 
     async def register_group(self, chat_id: int, title: str | None, added_by: int | None) -> bool:
-        """bot 被加入群組時登記。回傳該群組是否已獲授權。"""
+        """bot 被加入群組時登記。回傳該群組是否在永久白名單上。
+
+        `allowed` 只是永久放行的旗標，由 /allowgroup 明確設定，不會自動寫入。
+        群組能不能用主要看管理員在不在 —— 那是由 bot/group.py 動態判斷的，
+        不受這張表影響。
+        """
         row = await self._db.fetchone("SELECT * FROM groups WHERE chat_id = ?", (chat_id,))
         if row is None:
             await self._db.execute(
@@ -264,7 +269,7 @@ class AccessControl:
                 "VALUES (?, ?, 0, ?, ?)",
                 (chat_id, title, added_by, now_iso()),
             )
-            logger.warning("bot 被加入未授權群組：%s（%s）", chat_id, title)
+            logger.info("bot 被加入新群組：%s（%s），待確認管理員是否在場", title, chat_id)
             return False
         await self._db.execute(
             "UPDATE groups SET title = ? WHERE chat_id = ?", (title, chat_id)

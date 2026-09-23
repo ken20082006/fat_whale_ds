@@ -26,16 +26,20 @@ PRIVATE_SCOPE = "private"
 GROUP_SCOPE = "group"
 
 
-def scope_for(is_group: bool) -> str:
-    """長期筆記的命名空間，只有兩種。
+def scope_for(is_group: bool, chat_id: int | None = None) -> str:
+    """長期筆記的命名空間。
 
     - `private`：私聊。裡面的東西永遠不會在群組出現。
-    - `group`：**所有群組共用一份**。你在 A 群講的事，在 B 群也會被記得。
+    - `group:<chat_id>`：**每個群組各自獨立**。
 
-    私聊獨立是刻意的：朋友私下說過「我最近失業」，不該在群組被提起。
-    群組之間則是同一個人的公開面，沒有分開的理由。
+    兩層都是刻意的。私聊獨立是因為那是唯一真正敏感的地方 ——
+    朋友私下說過「我最近失業」，不該在群組被提起。
+    群組之間也分開，是因為不同群的成員、話題、玩笑尺度都不一樣，
+    把 A 群的內容帶到 B 群容易出錯。
     """
-    return GROUP_SCOPE if is_group else PRIVATE_SCOPE
+    if is_group and chat_id is not None:
+        return f"{GROUP_SCOPE}:{chat_id}"
+    return PRIVATE_SCOPE
 
 
 @dataclass(frozen=True)

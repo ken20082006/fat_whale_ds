@@ -299,8 +299,22 @@ def test_group_reply_chain_resolution():
     asyncio.run(scenario())
 
 
-def test_private_and_group_notes_are_isolated():
-    """私聊講的事不能流到群組，否則助理會在群裡說出朋友私下的內容。"""
+def test_scope_for_gives_each_group_its_own_namespace():
+    from dafeijing.core.session import scope_for
+
+    assert scope_for(is_group=False, chat_id=123) == "private"
+    assert scope_for(is_group=True, chat_id=-100) == "group:-100"
+    assert scope_for(is_group=True, chat_id=-200) == "group:-200"
+
+    # 不同群組必須拿到不同的名字，否則就會互相污染
+    assert scope_for(is_group=True, chat_id=-100) != scope_for(is_group=True, chat_id=-200)
+
+    # 沒有 chat_id 時退回私聊，不要產生半截的 scope
+    assert scope_for(is_group=True, chat_id=None) == "private"
+
+
+def test_notes_are_isolated_between_every_context():
+    """私聊、每個群組，全部各自獨立。"""
     cfg = FakeCfg()
 
     async def scenario() -> None:
@@ -308,47 +322,24 @@ def test_private_and_group_notes_are_isolated():
             db = await _new_db(Path(tmp))
             sessions = SessionManager(db, cfg)
 
+            await sessions.add_note(7, "A 群的事", scope="group:-100")
+            await sessions.add_note(7, "B 群的事", scope="group:-200")
             await sessions.add_note(7, "私聊的事", scope="private")
-            await sessions.add_note(7, "群組的事", scope="group")
 
+            assert await sessions.notes(7, "group:-100") == ["A 群的事"]
+            assert await sessions.notes(7, "group:-200") == ["B 群的事"]
             assert await sessions.notes(7, "private") == ["私聊的事"]
-            assert await sessions.notes(7, "group") == ["群組的事"]
 
-            # 清掉一邊不影響另一邊
-            assert await sessions.clear_notes(7, "group") == 1
+            counts = dict(await sessions.note_counts(7))
+            assert counts == {"group:-100": 1, "group:-200": 1, "private": 1}
+
+            # 清掉一個場合不影響其他
+            assert await sessions.clear_notes(7, "group:-100") == 1
+            assert await sessions.notes(7, "group:-200") == ["B 群的事"]
             assert await sessions.notes(7, "private") == ["私聊的事"]
-            assert await sessions.notes(7, "group") == []
 
-            assert await sessions.clear_notes(7, None) == 1
+            assert await sessions.clear_notes(7, None) == 2
             assert await sessions.note_counts(7) == []
-
-            await db.close()
-
-    asyncio.run(scenario())
-
-
-def test_group_notes_are_shared_across_all_groups():
-    """所有群組共用一份筆記 —— 在 A 群講的事，在 B 群也該被記得。"""
-    from dafeijing.core.session import GROUP_SCOPE, PRIVATE_SCOPE, scope_for
-
-    # scope 只由「是不是群組」決定，與是哪個群組無關
-    assert scope_for(is_group=True) == GROUP_SCOPE
-    assert scope_for(is_group=False) == PRIVATE_SCOPE
-    assert scope_for(is_group=True) == scope_for(is_group=True)
-
-    cfg = FakeCfg()
-
-    async def scenario() -> None:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            db = await _new_db(Path(tmp))
-            sessions = SessionManager(db, cfg)
-
-            a_group = scope_for(is_group=True)
-            b_group = scope_for(is_group=True)
-            assert a_group == b_group
-
-            await sessions.add_note(7, "在 A 群講的事", scope=a_group)
-            assert await sessions.notes(7, b_group) == ["在 A 群講的事"]
 
             await db.close()
 
