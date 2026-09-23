@@ -115,7 +115,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+_ADMIN_HELP = (
+    "\n管理員\n"
+    "  /issue <備註> — 產生邀請碼，5 分鐘內有效\n"
+    "  /invites — 看發過哪些邀請碼、綁給誰\n"
+    "  /revoke <邀請碼> — 撤銷還沒用掉的邀請碼\n"
+    "  /block <user_id> — 停用某個人\n"
+    "  /unblock <user_id> — 解除停用\n"
+    "  /groups — 看本鯨待過哪些群組\n"
+    "  /allowgroup [chat_id] — 永久放行某個群組（不填則用當前群組）\n"
+    "  /denygroup [chat_id] — 取消永久放行\n"
+    "  /cost [天數] — 用量與費用總帳\n"
+    "  /stats — 運轉狀態\n"
+    "  /reload_persona — 改完人設後重新載入，不必重啟\n"
+)
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    svc = get_services(context)
+    user = update.effective_user
+
     text = (
         "本鯨聽得懂的指令：\n\n"
         "對話\n"
@@ -140,6 +159,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "傳圖片、截圖、貼圖都看得懂，直接傳就行。\n\n"
         "群組裡要 @ 本鯨，或回覆本鯨的訊息，本鯨才會理你。"
     )
+
+    # 管理員指令只對管理員顯示，一般使用者看到只會混亂
+    if user is not None and svc.is_admin(user.id):
+        text += _ADMIN_HELP
+
     await update.effective_message.reply_text(text)
 
 
