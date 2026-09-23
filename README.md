@@ -263,7 +263,66 @@ docker compose down
 `TZ` 預設為 `Asia/Hong_Kong`。不設的話容器用 UTC，日誌時間會與主機差 8 小時。
 （資料庫的時間戳一律存 UTC，由程式自己處理，不受此影響。）
 
-### systemd
+### 搬遷到另一台機器
+
+**第一步：先把舊機停掉。**
+
+```bash
+docker compose down      # 或 podman compose down
+```
+
+這是最容易出錯的地方。兩台同時跑，Telegram 會對兩邊都回 409 Conflict，
+bot 看起來像壞掉，但其實是搶輪詢。
+
+**要帶過去的三個檔案**（都不在版控、也不在映像檔裡）：
+
+| 檔案 | 內容 | 不帶的後果 |
+|---|---|---|
+| `.env` | 金鑰與設定 | 起不來 |
+| `config/persona.md` | 人設 | 退回用範本，性格全失 |
+| `data/fatwhale.db` | **所有記憶** | 完全失憶 |
+
+**第二步：把資料庫做成一致快照，不要直接複製。**
+
+```bash
+python scripts/backup.py        # 產出 backups/fatwhale-<時間>.db
+```
+
+bot 運行時有 `-wal` 與 `-shm` 附屬檔，**最近的寫入可能還在 `-wal` 裡**。
+只複製 `.db` 會漏掉那部分。`backup.py` 用 SQLite 官方的 backup API，執行中也安全。
+
+**第三步：在新機上**
+
+```bash
+git clone https://github.com/ken20082006/fat_whale_ds.git
+cd fat_whale_ds
+
+mkdir -p backups data logs
+cp /path/to/.env .
+cp /path/to/persona.md config/
+cp /path/to/fatwhale-xxxx.db data/fatwhale.db
+
+docker compose up -d --build
+docker compose logs -f
+```
+
+`backups/`、`data/`、`logs/` 要先建好 —— Docker 自動建立時可能會有擁有者問題。
+
+**第四步：確認**
+
+```bash
+docker compose exec fatwhale python scripts/stats.py
+```
+
+應該看到原本的用量數字。如果筆記數是 0，代表資料庫沒帶對。
+
+**要帶 `assets/` 嗎？** 不用。貼圖是靠資料庫裡的 `file_id` 送出的，
+`assets/` 只是當初做標註時的素材。除非要重新標註，否則不必帶。
+
+**換時區的話**：`docker-compose.yml` 的 `TZ` 預設 `Asia/Hong_Kong`，
+在不同時區的機器上記得改。
+
+### systemd（不用容器時）
 
 見 `deploy/fatwhale.service`，安裝步驟寫在檔案開頭。
 

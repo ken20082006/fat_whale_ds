@@ -16,6 +16,11 @@ RUN pip install -r requirements.txt
 COPY dafeijing/ ./dafeijing/
 COPY config/persona.example.md ./config/persona.example.md
 
+# 維運腳本也放進去，這樣在容器裡就能跑查帳與備份，不必另外裝 Python：
+#   docker compose exec fatwhale python scripts/stats.py
+#   docker compose exec fatwhale python scripts/backup.py
+COPY scripts/ ./scripts/
+
 # 資料與日誌掛載出來，容器重建不會遺失
 RUN mkdir -p data logs && useradd -m whale && chown -R whale:whale /app
 USER whale

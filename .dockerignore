@@ -16,7 +16,7 @@ config/persona.md
 
 # 開發用檔案：Dockerfile 不會 COPY 它們，排除只是為了加快建置
 tests/
-scripts/
 deploy/
 *.md
 !README.md
+# scripts/ 不可以排除 —— Dockerfile 會 COPY 它，排除會讓建置失敗

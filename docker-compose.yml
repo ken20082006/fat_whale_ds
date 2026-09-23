@@ -20,6 +20,7 @@ services:
     volumes:
       - ./data:/app/data                       # SQLite
       - ./logs:/app/logs                       # 日誌
+      - ./backups:/app/backups                 # 備份快照
       - ./config/persona.md:/app/config/persona.md:ro   # 人設，不進映像檔
 
     logging:
