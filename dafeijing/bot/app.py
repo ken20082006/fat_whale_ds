@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from ..core.access import AccessControl
+from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.debounce import Debouncer
@@ -55,6 +55,7 @@ def create_services(cfg: Settings) -> Services:
         chat=ChatService(cfg, persona, sessions, access, llm, usage),
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
+        group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
         started_at=time.time(),
     )
 
@@ -81,6 +82,10 @@ def build_application(svc: Services) -> Application:
     # ── 進出群組 ──
     application.add_handler(
         ChatMemberHandler(group.on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
+    # 追蹤管理員的進出，這是群組可用性的依據
+    application.add_handler(
+        ChatMemberHandler(group.on_chat_member, ChatMemberHandler.CHAT_MEMBER)
     )
 
     # ── 使用者指令 ──
@@ -117,17 +122,11 @@ def build_application(svc: Services) -> Application:
     ):
         application.add_handler(CommandHandler(name, handler))
 
-    # ── 一般訊息 ──
+    # ── 一般訊息（文字、圖片、貼圖都走同一條路）──
     application.add_handler(
         MessageHandler(
-            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
-            private.handle_private_text,
-        )
-    )
-    application.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & ~filters.TEXT & ~filters.COMMAND,
-            private.handle_private_unsupported,
+            filters.ChatType.PRIVATE & ~filters.COMMAND,
+            private.handle_private_message,
         )
     )
     application.add_handler(

@@ -1,8 +1,12 @@
 """群組處理。
 
-兩件事完全分開：
-1. 快取 —— 所有群組訊息都寫入短期快取，只為了還原引用串，永不送進模型。
-2. 回應 —— 只有「被 @」或「回覆本鯨的訊息」才會觸發，且上下文限於該條引用串。
+三件事各自獨立：
+1. 進出群組 —— 判斷這個群組能不能用（管理員在不在裡面）
+2. 快取 —— 所有群組訊息寫入短期快取，只為了還原引用串，永不送進模型
+3. 回應 —— 只有「被 @」或「回覆本鯨的訊息」才觸發，上下文限於該條引用串
+
+群組的可用條件是「管理員目前在這個群組裡」，而不是「誰把本鯨加進來」。
+這樣只要主人在，換誰拉本鯨進群都能用；主人一走，本鯨也跟著走。
 """
 
 from __future__ import annotations
@@ -16,68 +20,134 @@ from telegram.ext import ContextTypes
 from ..core.chat import ChatRequest
 from ..llm.openrouter import LLMError
 from .commands import get_services
+from .ingest import collect
+from .services import Services
 from .ui import reply_markdown, reply_plain, typing
 
 logger = logging.getLogger(__name__)
+
+# PTB 的 ChatMember.status 是字串
+_PRESENT_STATUSES = frozenset({"creator", "administrator", "member", "restricted"})
+_GONE_STATUSES = frozenset({"left", "kicked"})
+
+
+def _is_group(chat) -> bool:
+    return chat is not None and chat.type in (ChatType.GROUP, ChatType.SUPERGROUP)
+
+
+async def _admin_present(bot, chat_id: int, admin_ids: set[int]) -> bool:
+    """逐一查管理員是否在群組裡。任何一位在就算數。"""
+    for admin_id in admin_ids:
+        try:
+            member = await bot.get_chat_member(chat_id, admin_id)
+        except Exception as exc:
+            logger.debug("查不到 %s 在群組 %s 的身分：%s", admin_id, chat_id, exc)
+            continue
+        if member.status in _PRESENT_STATUSES:
+            return True
+    return False
+
+
+async def group_usable(svc: Services, bot, chat_id: int) -> bool:
+    """這個群組能不能用。手動白名單優先，其次看管理員在不在。"""
+    if await svc.access.is_group_allowed(chat_id):
+        return True
+    if not svc.cfg.admin_ids:
+        return False
+
+    cached = svc.group_access.get(chat_id)
+    if cached is not None:
+        return cached
+
+    present = await _admin_present(bot, chat_id, svc.cfg.admin_ids)
+    svc.group_access.put(chat_id, present)
+    return present
 
 
 # ── 進出群組 ────────────────────────────────────────────
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """本鯨被加入或移出群組。
-
-    Telegram 沒有「只准某人把我加進群組」的設定（BotFather 的 /setjoingroups
-    是全有全無，連管理員也會一併擋掉）。所以改成在這裡判斷「是誰加的」：
-    my_chat_member 更新帶有 from 欄位，非管理員加的一律立刻退出。
-    """
+    """本鯨被加入或移出群組。"""
     member = update.my_chat_member
-    if member is None:
+    if member is None or not _is_group(member.chat):
         return
+
+    if member.new_chat_member.status in _GONE_STATUSES:
+        logger.info("已離開群組 %s", member.chat.id)
+        return
+
     chat = member.chat
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return
-
-    status = member.new_chat_member.status
-    if status in ("left", "kicked"):
-        logger.info("已離開群組 %s", chat.id)
-        return
-
     svc = get_services(context)
     added_by = member.from_user.id if member.from_user else None
     added_by_name = member.from_user.full_name if member.from_user else "未知"
 
     await svc.access.register_group(chat.id, chat.title, added_by)
+    svc.group_access.invalidate(chat.id)
 
-    if svc.is_admin(added_by):
-        await svc.access.set_group_allowed(chat.id, True)
+    present = await _admin_present(context.bot, chat.id, svc.cfg.admin_ids)
+    svc.group_access.put(chat.id, present)
+
+    if present:
         await context.bot.send_message(
             chat.id, "本鯨進來了。要找本鯨就 @ 我，或回覆本鯨的訊息。"
         )
-        logger.info("管理員把本鯨加入群組「%s」（%s），已自動授權", chat.title, chat.id)
+        logger.info(
+            "加入群組「%s」（%s），管理員在場，已放行（由 %s 加入）",
+            chat.title,
+            chat.id,
+            added_by_name,
+        )
         return
 
     logger.warning(
-        "非管理員 %s（%s）把本鯨加入群組「%s」（%s），立刻退出",
-        added_by_name,
-        added_by,
+        "被加入群組「%s」（%s）但管理員不在，退出（由 %s 加入）",
         chat.title,
         chat.id,
+        added_by_name,
     )
-    await context.bot.send_message(chat.id, "本鯨只認主人的邀請，先告退了。")
+    await context.bot.send_message(chat.id, "本鯨的主子不在這裡，先告退了。")
     await context.bot.leave_chat(chat.id)
 
     await _notify_admins(
         context,
         svc,
-        f"有人把本鯨加入了群組，本鯨已退出。\n\n"
+        f"有人把本鯨加入了群組，但你不在裡面，本鯨已退出。\n\n"
         f"　加入者：{added_by_name}（id: {added_by}）\n"
         f"　群組：{chat.title}（id: {chat.id}）\n\n"
-        f"若這個群組沒問題，先執行 /allowgroup {chat.id}，再請對方重新把本鯨加進去。",
+        f"想讓本鯨留在那個群，你先進去，再請對方重新加入。"
+        f"或用 /allowgroup {chat.id} 永久放行。",
     )
 
 
-async def _notify_admins(context: ContextTypes.DEFAULT_TYPE, svc, text: str) -> None:
+async def on_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """追蹤管理員的進出，這是群組可用性的依據。"""
+    change = update.chat_member
+    if change is None or not _is_group(change.chat):
+        return
+
+    svc = get_services(context)
+    who = change.new_chat_member.user
+    if not svc.is_admin(who.id):
+        return
+
+    chat_id = change.chat.id
+    svc.group_access.invalidate(chat_id)
+    status = change.new_chat_member.status
+
+    if status in _GONE_STATUSES:
+        logger.info("管理員 %s 離開群組 %s", who.id, chat_id)
+        if not await svc.access.is_group_allowed(chat_id):
+            try:
+                await context.bot.send_message(chat_id, "本鯨的主子走了，本鯨也該走了。")
+                await context.bot.leave_chat(chat_id)
+            except Exception:
+                logger.debug("退出群組 %s 失敗", chat_id)
+    else:
+        logger.info("管理員 %s 在群組 %s 中（%s）", who.id, chat_id, status)
+
+
+async def _notify_admins(context: ContextTypes.DEFAULT_TYPE, svc: Services, text: str) -> None:
     for admin_id in svc.cfg.admin_ids:
         try:
             await context.bot.send_message(admin_id, text)
@@ -95,7 +165,7 @@ async def cache_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     svc = get_services(context)
-    if not await svc.access.is_group_allowed(message.chat_id):
+    if not await group_usable(svc, context.bot, message.chat_id):
         return
 
     await svc.chain.cache_from_update(message)
@@ -109,23 +179,26 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     svc = get_services(context)
 
-    if message is None or user is None:
+    if message is None or user is None or not _is_group(message.chat):
         return
-    if message.chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        return
-    if not await svc.access.is_group_allowed(message.chat_id):
+    if not await group_usable(svc, context.bot, message.chat_id):
         return
     if not _is_addressed_to_bot(message, svc):
-        return
-
-    text = message.text or message.caption or ""
-    if not text.strip() and not message.reply_to_message:
         return
 
     allowed, wait = svc.limiter.check(user.id)
     if not allowed:
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
+
+    text, images = await collect(message, context.bot, svc.cfg)
+    if text is None and not images:
+        return
+
+    # 群組使用者也要有帳號列，否則讀不到他們的偏好設定
+    await svc.access.ensure(
+        user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
+    )
 
     # 引用串回溯：從被指名的那則往上追到源頭
     chain = await svc.chain.resolve(message.chat_id, message.message_id)
@@ -138,12 +211,13 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
     request = ChatRequest(
         tg_user_id=user.id,
         display_name=user.full_name,
-        text=text,
+        text=text or "",
         chat_id=message.chat_id,
         session=session,
         is_group=True,
         chain_text=chain_text or None,
         chain_messages=chain,
+        images=images,
     )
 
     try:
@@ -172,8 +246,8 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
 
-def _is_addressed_to_bot(message, svc) -> bool:
-    """被 @，或是回覆本鯨的訊息。"""
+def _is_addressed_to_bot(message, svc: Services) -> bool:
+    """被 @，或是回覆本鯨的訊息。圖片訊息要看 caption_entities。"""
     if message.reply_to_message and message.reply_to_message.from_user:
         if message.reply_to_message.from_user.id == svc.bot_id:
             return True
@@ -181,14 +255,17 @@ def _is_addressed_to_bot(message, svc) -> bool:
     if message.via_bot and message.via_bot.id == svc.bot_id:
         return True
 
-    if not message.entities or not svc.bot_username:
+    if not svc.bot_username:
         return False
 
+    body = message.text or message.caption or ""
+    entities = message.entities or message.caption_entities or []
     target = svc.bot_username.lower()
-    for entity in message.entities:
+
+    for entity in entities:
         if entity.type != MessageEntity.MENTION:
             continue
-        mentioned = (message.text or "")[entity.offset : entity.offset + entity.length]
+        mentioned = body[entity.offset : entity.offset + entity.length]
         if mentioned.lstrip("@").lower() == target:
             return True
     return False

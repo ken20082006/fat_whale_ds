@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # max_tokens 是上限而非預留，設寬不會多花錢，但能避免長回答或推理被截斷
     private_reply_max_tokens: int = 8000
     group_reply_max_tokens: int = 4000
+    # 「管理員在不在這個群組」的快取時間。Telegram 對 getChatMember 有速率限制，
+    # 而每則群組訊息都要判斷一次，所以必須快取。
+    group_membership_ttl_seconds: int = 300
     group_chain_max_messages: int = 40
     group_chain_max_tokens: int = 12_000
     group_thread_ttl_minutes: int = 720

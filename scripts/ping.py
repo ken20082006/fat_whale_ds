@@ -18,10 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from dafeijing.core.media import prepare_from_bytes  # noqa: E402
 from dafeijing.llm.openrouter import LLMError, OpenRouterClient  # noqa: E402
 from dafeijing.settings import Settings  # noqa: E402
 
 PROMPT = "用一句話回答：你是誰？"
+SAMPLE_IMAGE = Path("assets/stickers/LLM_Moe/01.png")
 
 
 async def ask(client: OpenRouterClient, reasoning: bool) -> None:
@@ -46,6 +48,47 @@ async def ask(client: OpenRouterClient, reasoning: bool) -> None:
     print()
 
 
+async def check_image(client: OpenRouterClient, cfg) -> None:
+    """驗證圖片真的送得進模型，並看它讀不讀得懂。"""
+    if not SAMPLE_IMAGE.is_file():
+        print("（找不到測試圖片，略過。先跑 scripts/fetch_stickers.py LLM_Moe）\n")
+        return
+
+    print("───── 圖片輸入 ─────")
+    image = prepare_from_bytes(
+        SAMPLE_IMAGE.read_bytes(), max_edge=cfg.image_max_edge, source="sticker"
+    )
+    print(
+        f"轉換後 {image.width}x{image.height}，{image.byte_size / 1024:.1f} KB，"
+        f"約 {image.approx_tokens} token"
+    )
+
+    try:
+        result = await client.chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "這張圖是什麼？用一句話描述。"},
+                        {"type": "image_url", "image_url": {"url": image.data_url}},
+                    ],
+                }
+            ],
+            max_tokens=300,
+            reasoning=False,
+        )
+    except LLMError as exc:
+        print(f"失敗：{exc}\n")
+        return
+
+    print(f"模型說：{result.text}")
+    print(
+        f"  輸入 {result.prompt_tokens} / 輸出 {result.completion_tokens}"
+        f"｜費用 ${result.cost:.6f}"
+    )
+    print()
+
+
 async def main() -> int:
     cfg = Settings()  # type: ignore[call-arg]
     if not cfg.openrouter_api_key:
@@ -59,6 +102,7 @@ async def main() -> int:
     try:
         await ask(client, reasoning=False)
         await ask(client, reasoning=True)
+        await check_image(client, cfg)
     finally:
         await client.close()
 

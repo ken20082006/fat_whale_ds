@@ -10,14 +10,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .media import PreparedImage
 
 logger = logging.getLogger(__name__)
+
+# 一次合併最多帶幾張圖。太多圖會讓成本與延遲同時上升，也超出模型能有效比較的範圍。
+MAX_IMAGES = 4
 
 
 @dataclass
 class _Buffer:
     parts: list[str] = field(default_factory=list)
-    has_image: bool = False
+    images: list["PreparedImage"] = field(default_factory=list)
 
 
 class Debouncer:
@@ -28,11 +35,14 @@ class Debouncer:
         self._lock = asyncio.Lock()
 
     async def gather(
-        self, key: str, text: str, has_image: bool = False
-    ) -> tuple[str, bool] | None:
+        self,
+        key: str,
+        text: str,
+        images: list["PreparedImage"] | None = None,
+    ) -> tuple[str, list["PreparedImage"]] | None:
         """合併同一對話的連續訊息。
 
-        回傳 (合併後文字, 是否含圖片) 給 leader；非 leader 回傳 None，
+        回傳 (合併後文字, 圖片列表) 給 leader；非 leader 回傳 None，
         代表這則訊息已被併入前一輪，呼叫端應直接結束。
         """
         async with self._lock:
@@ -40,11 +50,15 @@ class Debouncer:
                 buffer = self._buffers.get(key)
                 if buffer is not None:
                     buffer.parts.append(text)
-                    buffer.has_image = buffer.has_image or has_image
+                    for image in images or []:
+                        if len(buffer.images) < MAX_IMAGES:
+                            buffer.images.append(image)
                 return None
 
             self._leaders.add(key)
-            self._buffers[key] = _Buffer(parts=[text], has_image=has_image)
+            self._buffers[key] = _Buffer(
+                parts=[text], images=list(images or [])[:MAX_IMAGES]
+            )
 
         try:
             await asyncio.sleep(self._delay)
@@ -55,7 +69,7 @@ class Debouncer:
             merged = "\n".join(part for part in buffer.parts if part.strip())
             if len(buffer.parts) > 1:
                 logger.debug("合併 %d 則訊息（%s）", len(buffer.parts), key)
-            return merged, buffer.has_image
+            return merged, buffer.images
         finally:
             async with self._lock:
                 self._leaders.discard(key)

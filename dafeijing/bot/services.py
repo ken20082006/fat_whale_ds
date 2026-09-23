@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..core.access import AccessControl
+from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.debounce import Debouncer
@@ -33,6 +33,7 @@ class Services:
     chat: ChatService
     debouncer: Debouncer
     limiter: RateLimiter
+    group_access: MembershipCache
 
     bot_username: str = ""
     bot_id: int = 0

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -59,6 +60,33 @@ def normalise_code(raw: str) -> str:
     return f"{_PREFIX}-{cleaned[:4]}-{cleaned[4:]}"
 
 
+class MembershipCache:
+    """快取「管理員是否在這個群組裡」的查詢結果。
+
+    Telegram 對 getChatMember 有速率限制，而群組的每則訊息都要判斷一次，
+    不快取會被限流。TTL 到期才重新查，所以管理員退出後最多延遲一個 TTL 生效。
+    """
+
+    def __init__(self, ttl_seconds: int = 300) -> None:
+        self._ttl = ttl_seconds
+        self._entries: dict[int, tuple[float, bool]] = {}
+
+    def get(self, chat_id: int) -> bool | None:
+        entry = self._entries.get(chat_id)
+        if entry is None:
+            return None
+        stamp, value = entry
+        if time.monotonic() - stamp > self._ttl:
+            return None
+        return value
+
+    def put(self, chat_id: int, value: bool) -> None:
+        self._entries[chat_id] = (time.monotonic(), value)
+
+    def invalidate(self, chat_id: int) -> None:
+        self._entries.pop(chat_id, None)
+
+
 class AccessControl:
     def __init__(self, db: Database) -> None:
         self._db = db
@@ -79,8 +107,32 @@ class AccessControl:
         )
         return status == "active"
 
+    async def ensure(
+        self,
+        tg_user_id: int,
+        display_name: str | None,
+        username: str | None,
+        *,
+        is_admin: bool = False,
+    ) -> None:
+        """確保這個使用者有一列，並更新最後活動時間。
+
+        管理員不經邀請碼，redeem() 不會替他們建立帳號列，所以必須在這裡補上 ——
+        否則後面讀 vibe / reasoning 會拿到 None。
+        """
+        status = "active" if is_admin else "pending"
+        await self._db.execute(
+            "INSERT INTO users (tg_user_id, status, display_name, username, created_at, "
+            "last_seen_at) VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(tg_user_id) DO UPDATE SET "
+            "last_seen_at = excluded.last_seen_at, "
+            "display_name = COALESCE(excluded.display_name, users.display_name), "
+            "username = COALESCE(excluded.username, users.username)",
+            (tg_user_id, status, display_name, username, now_iso(), now_iso()),
+        )
+
     async def touch(self, tg_user_id: int, display_name: str | None, username: str | None) -> None:
-        """更新最後活動時間與顯示名稱。"""
+        """只更新最後活動時間與顯示名稱，不建立帳號列。"""
         await self._db.execute(
             "UPDATE users SET last_seen_at = ?, display_name = COALESCE(?, display_name), "
             "username = COALESCE(?, username) WHERE tg_user_id = ?",

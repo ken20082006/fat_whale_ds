@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 VALID_VIBES = ("low", "mid", "high")
 
 
+def _reasoning_label(value: int | None) -> str:
+    if value is None:
+        return "跟隨預設"
+    return "開啟" if value else "關閉"
+
+
 def get_services(context: ContextTypes.DEFAULT_TYPE) -> Services:
     return context.bot_data["services"]
 
@@ -109,6 +115,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /quota — 查自己的用量\n"
         "  /id — 查自己的 Telegram id\n"
         "  /help — 這份說明\n\n"
+        "傳圖片、截圖、貼圖都看得懂，直接傳就行。\n\n"
         "群組裡要 @ 本鯨，或回覆本鯨的訊息，本鯨才會理你。"
     )
     await update.effective_message.reply_text(text)
@@ -161,19 +168,22 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.effective_message.reply_text("這個指令請在私聊裡用。")
         return
 
+    await svc.access.ensure(
+        user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
+    )
     session = await svc.sessions.private_session(user.id)
     window = await svc.sessions.window(session.id)
     tokens = await svc.sessions.window_tokens(session.id)
     notes = await svc.sessions.notes(user.id)
-    row = await svc.access.get_user(user.id)
+    row = await svc.access.get_user(user.id) or {}
 
     lines = [
         "本鯨現在記得的東西：\n",
         f"短期　{len(window)} 則原文，約 {tokens} token",
         f"中期　摘要 {session.summary_tokens} token",
         f"長期　{len(notes)} 則筆記",
-        f"濃度　{row['vibe'] if row else 'mid'}",
-        "思考　" + ("跟隨預設" if row["reasoning"] is None else ("開啟" if row["reasoning"] else "關閉")),
+        f"濃度　{row.get('vibe') or 'mid'}",
+        "思考　" + _reasoning_label(row.get("reasoning")),
         f"上次　{humanise_age(session.last_active_at)}",
     ]
     if session.summary:
@@ -220,11 +230,14 @@ async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     svc = get_services(context)
     user = update.effective_user
-    row = await svc.access.get_user(user.id)
+    await svc.access.ensure(
+        user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
+    )
+    row = await svc.access.get_user(user.id) or {}
 
     argument = (context.args[0].lower() if context.args else "").strip()
     if argument not in ("on", "off", "auto"):
-        current = "跟隨預設" if row["reasoning"] is None else ("開啟" if row["reasoning"] else "關閉")
+        current = _reasoning_label(row.get("reasoning"))
         default = "開啟" if svc.cfg.reasoning_enabled else "關閉"
         await update.effective_message.reply_text(
             f"深度思考：{current}（全域預設為{default}）\n\n"

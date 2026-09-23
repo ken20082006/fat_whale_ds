@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from ..store.db import Database
+from .media import describe
 from .tokens import estimate_tokens
 from .util import now_iso
 
@@ -63,7 +64,11 @@ class ReplyChain:
             display_name = sender.full_name or sender.username
 
         text = message.text or message.caption
-        has_media = text is None
+        has_media = False
+        if text is None:
+            # 圖片與貼圖沒有文字，用一句描述代替，引用串才讀得懂
+            text = describe(message)
+            has_media = True
 
         await self.cache_message(
             chat_id=message.chat_id,

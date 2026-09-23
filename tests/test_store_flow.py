@@ -92,6 +92,55 @@ def test_invite_normalisation_and_expiry():
     asyncio.run(scenario())
 
 
+def test_ensure_creates_row_for_admin_who_never_redeemed():
+    """管理員不經邀請碼，必須靠 ensure 建立帳號列。
+
+    少了這一列，讀 vibe 或 reasoning 就會拿到 None 而炸掉 —— /context 就是這樣壞的。
+    """
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            access = AccessControl(db)
+
+            assert await access.get_user(216587605) is None
+
+            await access.ensure(216587605, "Ken", "ken", is_admin=True)
+
+            row = await access.get_user(216587605)
+            assert row is not None
+            assert row["status"] == "active"
+            assert row["reasoning"] is None  # None 代表跟隨全域設定
+            assert row["vibe"] == "mid"
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_ensure_does_not_downgrade_existing_user():
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = await _new_db(Path(tmp))
+            access = AccessControl(db)
+
+            code = await access.issue_invite("小明", created_by=1, ttl_seconds=300)
+            await access.redeem(99999, code, "小明", "ming")
+            await access.set_vibe(99999, "high")
+
+            # 之後每次互動都會呼叫 ensure，不能把 active 降回 pending，也不能蓋掉偏好
+            await access.ensure(99999, "小明", "ming")
+
+            row = await access.get_user(99999)
+            assert row["status"] == "active"
+            assert row["vibe"] == "high"
+            assert await db.fetchval("SELECT COUNT(*) FROM users") == 1
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_group_whitelist():
     async def scenario() -> None:
         with tempfile.TemporaryDirectory() as tmp:

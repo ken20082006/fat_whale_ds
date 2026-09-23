@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..llm.openrouter import LLMResult, OpenRouterClient
 from .access import AccessControl
+from .media import PreparedImage
 from .persona import Persona, PersonaContext
 from .session import SessionManager, SessionRef
 from .usage import UsageLog
@@ -27,6 +28,7 @@ class ChatRequest:
     is_group: bool = False
     chain_text: str | None = None
     chain_messages: list[dict] | None = None
+    images: list[PreparedImage] = field(default_factory=list)
 
 
 class ChatService:
@@ -75,7 +77,18 @@ class ChatService:
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         messages.extend({"role": item["role"], "content": item["content"]} for item in history)
-        messages.append({"role": "user", "content": user_content})
+
+        # 有圖片時改用多模態格式。歷史訊息一律維持純文字 ——
+        # 圖片不落庫（見下方 append），所以舊訊息本來也沒有圖可放。
+        if req.images:
+            content: list[dict] = [{"type": "text", "text": user_content}]
+            content.extend(
+                {"type": "image_url", "image_url": {"url": image.data_url}}
+                for image in req.images
+            )
+            messages.append({"role": "user", "content": content})
+        else:
+            messages.append({"role": "user", "content": user_content})
 
         max_tokens = (
             self._cfg.group_reply_max_tokens if req.is_group else self._cfg.private_reply_max_tokens
@@ -84,7 +97,10 @@ class ChatService:
         result = await self._llm.chat(messages, max_tokens=max_tokens, reasoning=reasoning)
 
         # 成功後才落庫。失敗的回合不留下痕跡，使用者重試時不會出現半截對話。
-        await self._sessions.append(req.session.id, "user", user_content)
+        # 只留文字描述不留圖檔：省空間，也避免使用者的照片被長期保存。
+        await self._sessions.append(
+            req.session.id, "user", user_content, has_image=bool(req.images)
+        )
         await self._sessions.append(req.session.id, "assistant", result.text)
 
         await self._usage.record(

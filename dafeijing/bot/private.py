@@ -10,7 +10,8 @@ from telegram.ext import ContextTypes
 
 from ..core.chat import ChatRequest
 from ..llm.openrouter import LLMError
-from .commands import ensure_active, get_services
+from .commands import get_services
+from .ingest import collect
 from .ui import reply_markdown, reply_plain, typing
 
 logger = logging.getLogger(__name__)
@@ -19,16 +20,17 @@ logger = logging.getLogger(__name__)
 _CODE_HINT = re.compile(r"^[Dd][Ff][Jj][\s\-_]*[A-Za-z0-9]{4}[\s\-_]*[A-Za-z0-9]{4}$")
 
 
-async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """私聊的所有非指令訊息：文字、圖片、貼圖、檔案。"""
     svc = get_services(context)
     message = update.effective_message
     user = update.effective_user
-    if message is None or user is None or not message.text:
+    if message is None or user is None:
         return
 
-    # 未授權者：先看看是不是在輸入邀請碼
+    # 未授權者：只有文字才可能是邀請碼
     if not svc.is_admin(user.id) and not await svc.access.is_active(user.id):
-        if _CODE_HINT.match(message.text.strip()):
+        if message.text and _CODE_HINT.match(message.text.strip()):
             result = await svc.access.redeem(
                 user.id, message.text, user.full_name, user.username
             )
@@ -37,9 +39,7 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 await message.reply_text("這串碼沒用。確認一下，或找邀請你的人再要一張。")
         else:
-            await message.reply_text(
-                "本鯨是私人養的。請輸入邀請碼，或點邀請連結進來。"
-            )
+            await message.reply_text("本鯨是私人養的。請輸入邀請碼，或點邀請連結進來。")
         return
 
     allowed, wait = svc.limiter.check(user.id)
@@ -47,12 +47,19 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
 
-    merged = await svc.debouncer.gather(f"private:{user.id}", message.text)
+    text, images = await collect(message, context.bot, svc.cfg)
+    if text is None:
+        await message.reply_text("這種訊息本鯨還讀不懂。用文字、圖片或貼圖都可以。")
+        return
+
+    merged = await svc.debouncer.gather(f"private:{user.id}", text, images)
     if merged is None:
         return  # 已併入前一輪
-    text, _has_image = merged
+    text, images = merged
 
-    await svc.access.touch(user.id, user.full_name, user.username)
+    await svc.access.ensure(
+        user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
+    )
     session = await svc.sessions.private_session(user.id)
 
     request = ChatRequest(
@@ -61,6 +68,7 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         text=text,
         chat_id=message.chat_id,
         session=session,
+        images=images,
     )
 
     try:
@@ -76,22 +84,3 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     await reply_markdown(message, result.text)
-
-
-async def handle_private_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """圖片、語音、貼圖等非文字訊息。"""
-    message = update.effective_message
-    user = update.effective_user
-    if message is None or user is None:
-        return
-
-    svc = get_services(context)
-    if not await ensure_active(update, context):
-        return
-
-    if message.sticker:
-        await message.reply_text("貼圖本鯨收到了，但暫時還看不懂，先打字吧。")
-    elif message.photo:
-        await message.reply_text("圖片功能還沒接上，先打字給本鯨。")
-    else:
-        await message.reply_text("這種訊息本鯨還讀不懂，先用文字。")
