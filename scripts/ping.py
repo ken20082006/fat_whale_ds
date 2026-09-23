@@ -48,6 +48,10 @@ async def ask(client: OpenRouterClient, reasoning: bool) -> None:
 
 async def main() -> int:
     cfg = Settings()  # type: ignore[call-arg]
+    if not cfg.openrouter_api_key:
+        print("FW_OPENROUTER_API_KEY 是空的，請先在 .env 填入。")
+        return 1
+
     client = OpenRouterClient(cfg)
 
     print(f"模型：{cfg.model}\n")

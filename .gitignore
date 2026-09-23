@@ -5,9 +5,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
-# 機密：金鑰與人設不進版控
+# 機密：金鑰、人設與形象圖不進版控
 .env
 config/persona.md
+assets/
 
 # 執行期資料
 data/

@@ -47,20 +47,22 @@ class Settings(BaseSettings):
     invite_ttl_seconds: int = 300  # 邀請碼有效期，預設五分鐘
 
     # ── Session ──
-    window_turns: int = 12
-    compact_trigger_tokens: int = 3000
-    summary_max_tokens: int = 400
-    idle_reset_minutes: int = 120
-    # max_tokens 是上限而非預留，設寬一點不會多花錢，但能避免推理吃掉額度後回傳空內容
-    private_reply_max_tokens: int = 3000
-    group_reply_max_tokens: int = 1500
-    group_chain_max_messages: int = 20
-    group_chain_max_tokens: int = 3000
-    group_thread_ttl_minutes: int = 360
+    # 模型有 1M 上下文，且輸入每百萬 token 僅 $0.1，所以視窗可以開得比一般保守值大。
+    # 30 輪約一萬多 token，每個請求的輸入成本仍在千分之一美元量級。
+    window_turns: int = 30
+    compact_trigger_tokens: int = 12_000
+    summary_max_tokens: int = 800
+    idle_reset_minutes: int = 480
+    # max_tokens 是上限而非預留，設寬不會多花錢，但能避免長回答或推理被截斷
+    private_reply_max_tokens: int = 8000
+    group_reply_max_tokens: int = 4000
+    group_chain_max_messages: int = 40
+    group_chain_max_tokens: int = 12_000
+    group_thread_ttl_minutes: int = 720
 
     # ── 節流 ──
     debounce_seconds: float = 1.5
-    rate_per_minute: int = 5
+    rate_per_minute: int = 20
 
     # ── 保存期限 ──
     history_retention_days: int = 30
