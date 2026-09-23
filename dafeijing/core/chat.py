@@ -117,6 +117,7 @@ class ChatService:
                 others_notes=others_notes,
                 can_search=self._cfg.search_mode != "off",
                 can_fetch=self._cfg.fetch_max_urls > 0,
+                self_search=self._cfg.search_mode not in ("off", "always"),
             )
         )
 

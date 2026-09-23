@@ -105,6 +105,9 @@ class PersonaContext:
     # 但聯網功能已經開了，模型就照著說自己上不了網）。
     can_search: bool = False
     can_fetch: bool = False
+    # 是否讓模型自己決定要不要查。always 模式下每則都已經查了，
+    # 再叫它輸出標記只會讓它困惑。
+    self_search: bool = False
     # 同一場合裡其他人的筆記：(名字, 筆記列表)。只在被 @ 到時才會帶進來。
     others_notes: list[tuple[str, list[str]]] = field(default_factory=list)
 
@@ -247,7 +250,7 @@ def _capability_block(ctx: PersonaContext) -> str:
     """
     lines = ["\n### 你能做什麼\n"]
 
-    if ctx.can_search:
+    if ctx.can_search and ctx.self_search:
         lines.append(
             "- **能聯網搜尋。** 對方叫你查、或問題涉及最新資訊時，你是真的查得到，"
             "而且會附上來源。不要說自己沒有上網能力。\n"
@@ -257,6 +260,13 @@ def _capability_block(ctx: PersonaContext) -> str:
             "\n  要查的時候，**只回覆這一行，不要寫其他內容**：\n"
             "  `[[搜尋:你要查的關鍵字]]`\n"
             "  系統會查完之後讓你正式回答。不需要查就直接回答，不要加這個標記。\n"
+        )
+    elif ctx.can_search:
+        lines.append(
+            "- **能聯網搜尋，而且每一則都會自動查。** 你收到的內容可能已經附有\n"
+            "  最新的網路資料與來源連結。直接運用那些資料回答，不要說自己沒有上網能力。\n"
+            "\n  查到的东西跟你的記憶有出入時，以查到的為準 —— 你的訓練資料有截止日期。\n"
+            "  查不到相關資料就直接答，不要為了用上搜尋結果而硬扯。\n"
         )
     else:
         lines.append("- 目前沒有開啟聯網搜尋，遇到需要查證的事要直說。\n")
