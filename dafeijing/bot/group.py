@@ -18,6 +18,8 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from ..core.chat import ChatRequest
+from ..core.debounce import MAX_IMAGES
+from ..core.media import MediaError, PreparedImage, prepare_from_telegram
 from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
@@ -191,8 +193,9 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
 
-    text, images = await collect(message, context.bot, svc.cfg)
-    if text is None and not images:
+    # include_reply=False：被引用的那一則由下面的引用串統一處理，避免重複下載
+    text, own_images = await collect(message, context.bot, svc.cfg, include_reply=False)
+    if text is None and not own_images:
         return
 
     # 群組使用者也要有帳號列，否則讀不到他們的偏好設定
@@ -204,6 +207,15 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
     chain = await svc.chain.resolve(message.chat_id, message.message_id)
     root_id = chain[0]["message_id"] if chain else message.message_id
     chain_text = svc.chain.format_for_prompt(chain, svc.bot_name)
+
+    # 串裡出現過的圖片也要真的抓下來。只給「〔圖片〕」這種文字標註的話，
+    # 對方引用的圖等於沒被看到。
+    chain_images = await _gather_chain_media(
+        chain, context.bot, svc.cfg, skip={message.message_id}, limit=MAX_IMAGES
+    )
+    images = chain_images + own_images
+    if len(images) > MAX_IMAGES:
+        images = images[-MAX_IMAGES:]  # 保留最靠近提問的幾張
 
     # 群組不做 debounce：每條串都是獨立事件，合併反而會混淆發言者
     session = await svc.sessions.group_thread_session(message.chat_id, root_id)
@@ -244,6 +256,43 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
             display_name=svc.bot_name,
             text=result.text,
         )
+
+
+async def _gather_chain_media(
+    chain: list[dict],
+    bot,
+    cfg,
+    *,
+    skip: set[int],
+    limit: int,
+) -> list[PreparedImage]:
+    """把引用串裡出現過的圖片抓下來，由舊到新回傳。
+
+    先從最新往回取 —— 越靠近提問的越相關，超過上限時先丟掉最舊的。
+    """
+    candidates: list[tuple[str, str]] = []
+
+    for item in reversed(chain):
+        if len(candidates) >= limit:
+            break
+        file_id = item.get("media_file_id")
+        if not file_id or item.get("message_id") in skip:
+            continue
+        candidates.append((file_id, item.get("media_source") or "photo"))
+
+    images: list[PreparedImage] = []
+    for file_id, source in reversed(candidates):
+        try:
+            images.append(
+                await prepare_from_telegram(
+                    bot, file_id, max_edge=cfg.image_max_edge, source=source
+                )
+            )
+        except MediaError:
+            # 舊檔可能已失效，略過就好，不該讓整則訊息失敗
+            logger.warning("引用串裡的圖片抓不到，略過：%s", file_id)
+
+    return images
 
 
 def _is_addressed_to_bot(message, svc: Services) -> bool:

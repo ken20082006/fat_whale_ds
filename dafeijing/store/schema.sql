@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS memory_notes (
 CREATE INDEX IF NOT EXISTS idx_notes_user ON memory_notes(user_id, scope);
 
 -- 群組訊息短期快取，供回溯引用鏈。逾時自動清除，永不送進模型。
+-- media_file_id 是必要欄位，不是冗餘：引用串還原時要能把當初那張圖真的抓下來，
+-- 只存「〔圖片〕」這種文字標註的話，事後就沒有東西可下載了。
 CREATE TABLE IF NOT EXISTS group_cache (
     chat_id       INTEGER NOT NULL,
     message_id    INTEGER NOT NULL,
@@ -74,6 +76,8 @@ CREATE TABLE IF NOT EXISTS group_cache (
     display_name  TEXT,
     text          TEXT,
     has_media     INTEGER NOT NULL DEFAULT 0,
+    media_file_id TEXT,
+    media_source  TEXT,
     created_at    TEXT    NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );

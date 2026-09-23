@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from ..store.db import Database
-from .media import describe
+from .media import describe, pick_file
 from .tokens import estimate_tokens
 from .util import now_iso
 
@@ -36,11 +36,14 @@ class ReplyChain:
         display_name: str | None,
         text: str | None,
         has_media: bool = False,
+        media_file_id: str | None = None,
+        media_source: str | None = None,
     ) -> None:
         await self._db.execute(
             "INSERT OR REPLACE INTO group_cache "
-            "(chat_id, message_id, reply_to_id, user_id, display_name, text, has_media, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(chat_id, message_id, reply_to_id, user_id, display_name, text, has_media, "
+            "media_file_id, media_source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 message_id,
@@ -49,6 +52,8 @@ class ReplyChain:
                 display_name,
                 text or "",
                 1 if has_media else 0,
+                media_file_id,
+                media_source,
                 now_iso(),
             ),
         )
@@ -70,6 +75,9 @@ class ReplyChain:
             text = describe(message)
             has_media = True
 
+        # 存下 file_id。只存文字標註的話，日後引用到這則時就沒有東西可下載。
+        picked = pick_file(message)
+
         await self.cache_message(
             chat_id=message.chat_id,
             message_id=message.message_id,
@@ -78,6 +86,8 @@ class ReplyChain:
             display_name=display_name,
             text=text,
             has_media=has_media,
+            media_file_id=picked[0] if picked else None,
+            media_source=picked[1] if picked else None,
         )
 
     async def purge(self) -> int:
@@ -101,7 +111,8 @@ class ReplyChain:
             seen.add(current)
 
             row = await self._db.fetchone(
-                "SELECT message_id, reply_to_id, user_id, display_name, text, has_media "
+                "SELECT message_id, reply_to_id, user_id, display_name, text, has_media, "
+                "media_file_id, media_source "
                 "FROM group_cache WHERE chat_id = ? AND message_id = ?",
                 (chat_id, current),
             )
@@ -153,6 +164,8 @@ class ReplyChain:
             "display_name": None,
             "text": _ELISION.format(n=omitted),
             "has_media": False,
+            "media_file_id": None,
+            "media_source": None,
             "reply_to_id": None,
             "user_id": None,
         }

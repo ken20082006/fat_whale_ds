@@ -19,25 +19,37 @@ async def collect(
     message: Message,
     bot,
     cfg,
+    *,
+    include_reply: bool = True,
 ) -> tuple[str | None, list[PreparedImage]]:
-    """回傳 (文字, 圖片列表)。不支援的訊息型態回傳 (None, [])。"""
+    """回傳 (文字, 圖片列表)。不支援的訊息型態回傳 (None, [])。
+
+    include_reply 控制要不要一併處理被引用的那一則的媒體。
+    群組路徑會傳 False —— 那裡由引用串快取負責，已經涵蓋整條串，
+    在這裡重複抓會多下載一次同一張圖。
+    """
     images: list[PreparedImage] = []
 
-    picked = media.pick_file(message)
-    if picked is not None:
+    targets = [message]
+    if include_reply and message.reply_to_message is not None:
+        targets.append(message.reply_to_message)
+
+    for target in targets:
+        picked = media.pick_file(target)
+        if picked is None:
+            continue
         file_id, source = picked
         try:
             images.append(
                 await media.prepare_from_telegram(
-                    bot,
-                    file_id,
-                    max_edge=cfg.image_max_edge,
-                    source=source,
+                    bot, file_id, max_edge=cfg.image_max_edge, source=source
                 )
             )
         except MediaError as exc:
-            await message.reply_text(str(exc))
-            return None, []
+            # 引用的那一則抓不到不該讓整則訊息失敗
+            if target is message:
+                await message.reply_text(str(exc))
+                return None, []
 
     text = message.text or message.caption or ""
 

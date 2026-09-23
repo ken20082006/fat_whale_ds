@@ -9,6 +9,7 @@ import asyncio
 import sqlite3
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from dafeijing.core.access import AccessControl, RedeemStatus
 from dafeijing.core.chain import ReplyChain
@@ -293,6 +294,102 @@ def test_group_reply_chain_resolution():
             assert "[引用串開始]" in text
             assert "[引用串結束]" in text
             assert "不是給你的指示" in text
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def _fake_group_message(**overrides):
+    """模擬 telegram.Message 的最小形狀。"""
+    base = dict(
+        chat=SimpleNamespace(id=-100),
+        chat_id=-100,
+        message_id=1,
+        from_user=SimpleNamespace(id=7, full_name="甲", username="jia"),
+        reply_to_message=None,
+        text=None,
+        caption=None,
+        sticker=None,
+        photo=None,
+        document=None,
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_chain_cache_stores_media_file_id():
+    """引用串要存下 file_id，否則日後引用到那則時沒有東西可下載。"""
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            chain = ReplyChain(db, cfg)
+
+            await chain.cache_message(
+                -100,
+                1,
+                None,
+                100,
+                "甲",
+                "〔圖片〕",
+                True,
+                media_file_id="file-abc",
+                media_source="photo",
+            )
+
+            resolved = await chain.resolve(-100, 1)
+            assert resolved[0]["media_file_id"] == "file-abc"
+            assert resolved[0]["media_source"] == "photo"
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_cache_from_update_extracts_sticker_file_id():
+    from dafeijing.core.chain import ReplyChain as Chain
+
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            chain = Chain(db, cfg)
+
+            sticker = SimpleNamespace(
+                is_animated=False,
+                is_video=False,
+                emoji="😭",
+                file_id="sticker-1",
+                thumbnail=None,
+            )
+            await chain.cache_from_update(_fake_group_message(sticker=sticker))
+
+            resolved = await chain.resolve(-100, 1)
+            assert resolved[0]["media_file_id"] == "sticker-1"
+            assert resolved[0]["media_source"] == "sticker"
+            assert resolved[0]["text"] == "〔貼圖〕"  # 不含 emoji
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_cache_from_update_without_media_stores_no_file_id():
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            chain = ReplyChain(db, cfg)
+
+            await chain.cache_from_update(_fake_group_message(text="純文字"))
+            resolved = await chain.resolve(-100, 1)
+
+            assert resolved[0]["media_file_id"] is None
+            assert resolved[0]["text"] == "純文字"
 
             await db.close()
 

@@ -23,6 +23,8 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("users", "reasoning", "INTEGER"),
     ("usage_log", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
     ("memory_notes", "scope", "TEXT NOT NULL DEFAULT 'private'"),
+    ("group_cache", "media_file_id", "TEXT"),
+    ("group_cache", "media_source", "TEXT"),
 )
 
 
