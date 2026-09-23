@@ -71,6 +71,12 @@ def build_application(svc: Services) -> Application:
     application = (
         Application.builder()
         .token(svc.cfg.telegram_bot_token)
+        # 預設逾時偏短，家用網路偶爾一個抖動就讓 bot 起不來。
+        # 啟動階段的 getMe 由 PTB 自己做，我們的重試涵蓋不到。
+        .connect_timeout(20.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .pool_timeout(10.0)
         .post_init(_post_init)
         .post_shutdown(_post_shutdown)
         .build()
@@ -105,6 +111,7 @@ def build_application(svc: Services) -> Application:
         ("context", commands.cmd_context),
         ("vibe", commands.cmd_vibe),
         ("think", commands.cmd_think),
+        ("search", commands.cmd_search),
         ("remember", commands.cmd_remember),
         ("forget", commands.cmd_forget),
         ("export", commands.cmd_export),

@@ -16,6 +16,7 @@ from .persona import Persona, PersonaContext
 from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
+from .webfetch import fetch_all, find_urls, wants_search
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class ChatRequest:
     chain_text: str | None = None
     chain_messages: list[dict] | None = None
     images: list[PreparedImage] = field(default_factory=list)
+    force_search: bool = False
 
 
 @dataclass
@@ -64,6 +66,8 @@ class ChatService:
         self._memory = memory
         self._stickers = stickers
         self.blocked_leaks = 0
+        self.web_searches = 0
+        self.fetched_pages = 0
 
     async def respond(self, req: ChatRequest) -> ChatOutcome:
         user = await self._access.get_user(req.tg_user_id)
@@ -90,8 +94,29 @@ class ChatService:
             )
         )
 
+        base_text = req.chain_text or req.text
+
+        # 對方貼了連結就讀進來。抓回來的內容是外部文字，包成資料區塊送出去，
+        # 但它不落庫 —— 存進對話歷史會讓每一輪都背著整頁網頁，成本會失控。
+        page_blocks: list[str] = []
+        if self._cfg.fetch_max_urls > 0:
+            pages = await fetch_all(find_urls(base_text), limit=self._cfg.fetch_max_urls)
+            if pages:
+                page_blocks = [page.as_block() for page in pages]
+                self.fetched_pages += len(pages)
+
+        # 意圖靠關鍵詞偵測；/search 是偵測失手時的保險。
+        search = self._cfg.search_enabled and (wants_search(base_text) or req.force_search)
+        if search:
+            self.web_searches += 1
+
+        if page_blocks:
+            user_content = f"{base_text}\n\n" + "\n\n".join(page_blocks)
+            stored_content = f"{base_text}\n\n〔讀取了 {len(page_blocks)} 個連結〕"
+        else:
+            user_content = stored_content = base_text
+
         history = await self._sessions.window(req.session.id)
-        user_content = req.chain_text or req.text
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         messages.extend({"role": item["role"], "content": item["content"]} for item in history)
@@ -112,7 +137,9 @@ class ChatService:
             self._cfg.group_reply_max_tokens if req.is_group else self._cfg.private_reply_max_tokens
         )
 
-        result = await self._llm.chat(messages, max_tokens=max_tokens, reasoning=reasoning)
+        result = await self._llm.chat(
+            messages, max_tokens=max_tokens, reasoning=reasoning, web_search=search
+        )
 
         # 先把貼圖標記拿掉 —— 那是給系統看的，不能留在訊息裡。
         cleaned, sticker_index = extract_marker(result.text)
@@ -141,7 +168,7 @@ class ChatService:
         # 成功後才落庫。失敗的回合不留下痕跡，使用者重試時不會出現半截對話。
         # 只留文字描述不留圖檔：省空間，也避免使用者的照片被長期保存。
         await self._sessions.append(
-            req.session.id, "user", user_content, has_image=bool(req.images)
+            req.session.id, "user", stored_content, has_image=bool(req.images)
         )
         await self._sessions.append(req.session.id, "assistant", result.text)
 
@@ -167,17 +194,19 @@ class ChatService:
         self._memory.schedule(
             tg_user_id=req.tg_user_id,
             scope=scope,
-            user_text=req.text or user_content,
+            user_text=req.text or base_text,
             assistant_text=result.text,
         )
 
         logger.info(
-            "%s → %d in / %d out（推理 %d、快取 %d）",
+            "%s → %d in / %d out（推理 %d、快取 %d）%s%s",
             "群組" if req.is_group else "私聊",
             result.prompt_tokens,
             result.completion_tokens,
             result.reasoning_tokens,
             result.cached_tokens,
+            "｜聯網搜尋" if search else "",
+            f"｜讀取 {len(page_blocks)} 個連結" if page_blocks else "",
         )
         return ChatOutcome(
             text=result.text,

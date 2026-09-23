@@ -12,9 +12,12 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from ..core.access import RedeemStatus
+from ..core.chat import ChatRequest
 from ..core.session import PRIVATE_SCOPE, scope_for
 from ..core.util import humanise_age, truncate
+from ..llm.openrouter import LLMError
 from .services import Services
+from .ui import reply_markdown, reply_plain, typing
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +149,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /export — 把這段對話匯出成檔案\n\n"
         "偏好\n"
         "  /vibe low | mid | high — 調整本鯨的演出濃度\n"
-        "  /think on | off | auto — 深度思考開關\n\n"
+        "  /think on | off | auto — 深度思考開關\n"
+        "  /search <關鍵字> — 強制聯網查一次（平常直接說「上網查…」即可）\n\n"
         "記憶\n"
         "  /remember <內容> — 要本鯨長期記住這件事\n"
         "  /forget — 清掉這個場合的筆記\n"
@@ -312,6 +316,57 @@ async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "auto": "好，恢復預設。",
     }
     await update.effective_message.reply_text(remarks[argument])
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """強制聯網查一次。
+
+    平常不必用這個 —— 直接說「上網查一下…」就會觸發。這是關鍵詞偵測失手時的保險。
+    """
+    if not await ensure_active(update, context):
+        return
+    svc = get_services(context)
+    message = update.effective_message
+    user = update.effective_user
+
+    query = " ".join(context.args).strip() if context.args else ""
+    if not query:
+        await message.reply_text(
+            "用法：/search <想查的東西>\n通常直接說「上網查一下…」就可以了。"
+        )
+        return
+
+    if update.effective_chat.type != ChatType.PRIVATE:
+        await message.reply_text("這個指令請在私聊裡用。")
+        return
+
+    await svc.access.ensure(
+        user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
+    )
+    session = await svc.sessions.private_session(user.id)
+
+    request = ChatRequest(
+        tg_user_id=user.id,
+        display_name=user.full_name,
+        text=query,
+        chat_id=message.chat_id,
+        session=session,
+        force_search=True,
+    )
+
+    try:
+        async with typing(context.bot, message.chat_id):
+            outcome = await svc.chat.respond(request)
+    except LLMError as exc:
+        await reply_plain(message, str(exc))
+        return
+    except Exception:
+        logger.exception("/search 失敗")
+        svc.errors += 1
+        await reply_plain(message, "本鯨查不到，出了點狀況。")
+        return
+
+    await reply_markdown(message, outcome.text)
 
 
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -546,6 +601,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"　對話 session　{sessions}\n"
         f"　群組快取　　　{cached} 則\n"
         f"　攔下的洩漏　　{svc.chat.blocked_leaks}\n"
+        f"　聯網搜尋　　　{svc.chat.web_searches} 次\n"
+        f"　讀取連結　　　{svc.chat.fetched_pages} 頁\n"
         f"　累計錯誤　　　{svc.errors}\n"
         f"　運行時間　　　{uptime // 3600} 小時 {uptime % 3600 // 60} 分"
     )

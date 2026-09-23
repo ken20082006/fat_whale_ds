@@ -37,6 +37,20 @@ class Settings(BaseSettings):
     # 使用者可用 /think 個別開啟。
     reasoning_enabled: bool = False
 
+    # ── 聯網 ──
+    # 由 OpenRouter 代為搜尋。對方說「上網查」「search 一下」之類就會啟用，
+    # 也可以直接叫他讀某個連結。
+    search_enabled: bool = True
+    # 實測同一題的費用：exa $0.0083、parallel $0.0057、parallel+turbo $0.0018、
+    # parallel+fast $0.0013。預設選最便宜的組合，品質實測沒有明顯差異。
+    # exa 是 DeepSeek 這類非原生模型的官方預設，若覺得品質不穩可以改回去。
+    search_engine: str = "parallel"
+    # 引擎分級。fast 對 exa 與 parallel 都有效；留空則用引擎預設（較貴）。
+    search_mode: str = "fast"
+    search_max_results: int = 5
+    # 一則訊息最多讀幾個對方貼的連結
+    fetch_max_urls: int = 3
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

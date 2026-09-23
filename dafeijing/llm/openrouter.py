@@ -71,6 +71,7 @@ class OpenRouterClient:
         max_tokens: int | None = None,
         temperature: float = 1.0,
         reasoning: bool | None = None,
+        web_search: bool = False,
     ) -> LLMResult:
         payload = {
             "model": model or self._cfg.model,
@@ -85,6 +86,18 @@ class OpenRouterClient:
         # 只有明確要關的時候才送參數；其他值（effort=low/minimal）實測無效。
         if reasoning is False:
             payload["reasoning"] = {"enabled": False}
+
+        # 聯網搜尋。由 OpenRouter 代為搜尋，結果以摘要形式注入並附上來源標註。
+        # 這是獨立的計費項目，與 token 分開算。
+        if web_search:
+            plugin: dict = {
+                "id": "web",
+                "engine": self._cfg.search_engine,
+                "max_results": self._cfg.search_max_results,
+            }
+            if self._cfg.search_mode:
+                plugin["mode"] = self._cfg.search_mode
+            payload["plugins"] = [plugin]
 
         data = await self._post(payload)
         return self._parse(data)
