@@ -205,6 +205,15 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
     )
 
+    # 被引用的那一則若不在快取裡，用即時更新附帶的內容補上。
+    #
+    # Bot API 明文規定 bot 收不到其他 bot 的訊息，所以別的 bot 講過的話
+    # 永遠不會進快取，引用鏈回溯到那裡就斷掉。但「被引用的那一則」會跟著
+    # 使用者的訊息一起送上來（reply_to_message），即使那是別的 bot 發的。
+    # 補進快取之後，回溯就接得起來，而且以後再被引用也不會斷。
+    if message.reply_to_message is not None:
+        await svc.chain.cache_from_update(message.reply_to_message)
+
     # 引用串回溯：從被指名的那則往上追到源頭
     chain = await svc.chain.resolve(message.chat_id, message.message_id)
     root_id = chain[0]["message_id"] if chain else message.message_id

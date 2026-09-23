@@ -377,6 +377,50 @@ def test_cache_from_update_extracts_sticker_file_id():
     asyncio.run(scenario())
 
 
+def test_cache_from_update_handles_another_bots_message():
+    """別的 bot 的訊息也要能進快取。
+
+    Bot API 不轉發其他 bot 的訊息，所以它們不會自然進入快取，
+    引用鏈回溯到那裡就斷。使用者引用另一隻 bot 再 @ 我們時，靠的是
+    即時更新附帶的 reply_to_message —— 這則測試確保那個物件能被正確解析。
+    """
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            chain = ReplyChain(db, cfg)
+
+            other_bot = _fake_group_message(
+                message_id=500,
+                text="我是另一隻 bot 的訊息",
+                from_user=SimpleNamespace(
+                    id=1234567890, full_name="其他Bot", username="other_bot", is_bot=True
+                ),
+            )
+            await chain.cache_from_update(other_bot)
+
+            resolved = await chain.resolve(-100, 500)
+            assert resolved[0]["display_name"] == "其他Bot"
+            assert resolved[0]["text"] == "我是另一隻 bot 的訊息"
+
+            # 接著使用者引用它 → 回溯應該接得起來，而不是斷在那裡
+            user_reply = _fake_group_message(
+                message_id=501,
+                reply_to_message=other_bot,
+                text="@bot 呢句咩意思",
+            )
+            await chain.cache_from_update(user_reply)
+
+            full = await chain.resolve(-100, 501)
+            assert [item["message_id"] for item in full] == [500, 501]
+            assert full[0]["display_name"] == "其他Bot"
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_cache_from_update_without_media_stores_no_file_id():
     cfg = FakeCfg()
 
