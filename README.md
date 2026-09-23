@@ -257,6 +257,23 @@ docker compose down
 
 `.dockerignore` 是必要的 —— 少了它，建置會把整個 `.venv` 送進建置上下文。
 
+> **不要在容器運行時，於主機上執行會寫入資料庫的腳本。**
+>
+> 已經發生過一次：主機在跑貼圖標註、容器同時開著同一個資料庫，結果
+> `database disk image is malformed`。WSL 的 bind mount 上 SQLite 的檔案鎖
+> 不可靠，兩個程序同時寫就會壞。
+>
+> 正確做法是在容器裡跑（`scripts/` 已經包進映像檔）：
+>
+> ```bash
+> docker compose exec fatwhale python scripts/label_stickers.py <貼圖包>
+> ```
+>
+> 若一定要在主機上跑，**先 `docker compose down`**，跑完再啟動。
+>
+> 備份是唯一的安全網：**定期跑 `scripts/backup.py`**。這次就是靠一份
+> 一小時前的快照才把 8 張表救回來。
+
 容器以非 root 使用者（`whale`）執行。rootless Podman 的掛載目錄權限
 實測可寫，若遇到權限問題可加 `--userns=keep-id`。
 
