@@ -23,17 +23,19 @@ logger = logging.getLogger(__name__)
 SummarizerFn = Callable[[str], Awaitable[str]]
 
 PRIVATE_SCOPE = "private"
+GROUP_SCOPE = "group"
 
 
-def scope_for(is_group: bool, chat_id: int | None) -> str:
-    """長期筆記的命名空間。
+def scope_for(is_group: bool) -> str:
+    """長期筆記的命名空間，只有兩種。
 
-    私聊與每個群組各自獨立 —— 私聊記的事絕不會在群組被讀到，
-    否則助理會不經意說出使用者私下講過的內容。
+    - `private`：私聊。裡面的東西永遠不會在群組出現。
+    - `group`：**所有群組共用一份**。你在 A 群講的事，在 B 群也會被記得。
+
+    私聊獨立是刻意的：朋友私下說過「我最近失業」，不該在群組被提起。
+    群組之間則是同一個人的公開面，沒有分開的理由。
     """
-    if is_group and chat_id is not None:
-        return f"group:{chat_id}"
-    return PRIVATE_SCOPE
+    return GROUP_SCOPE if is_group else PRIVATE_SCOPE
 
 
 @dataclass(frozen=True)
@@ -246,13 +248,38 @@ class SessionManager:
 
     # ── 長期記憶 ────────────────────────────────────────
 
-    async def notes(self, tg_user_id: int, scope: str = PRIVATE_SCOPE) -> list[str]:
+    async def notes(
+        self,
+        tg_user_id: int,
+        scope: str = PRIVATE_SCOPE,
+        limit: int | None = None,
+    ) -> list[str]:
+        """由舊到新。limit 為 None 時取 cfg 的上限；整理筆記時要傳大一點。"""
         rows = await self._db.fetchall(
             "SELECT content FROM memory_notes WHERE user_id = ? AND scope = ? "
             "ORDER BY id DESC LIMIT ?",
-            (tg_user_id, scope, self._cfg.notes_per_scope_max),
+            (tg_user_id, scope, limit or self._cfg.notes_per_scope_max),
         )
         return [row["content"] for row in reversed(rows)]
+
+    async def replace_notes(self, tg_user_id: int, scope: str, contents: list[str]) -> int:
+        """整批換掉某個場合的筆記。給定期整理用。"""
+        cleaned = [" ".join(item.split())[:500] for item in contents]
+        cleaned = [item for item in cleaned if item][: self._cfg.notes_per_scope_max]
+        if not cleaned:
+            return 0
+
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                "DELETE FROM memory_notes WHERE user_id = ? AND scope = ?",
+                (tg_user_id, scope),
+            )
+            await conn.executemany(
+                "INSERT INTO memory_notes (user_id, scope, content, source, created_at) "
+                "VALUES (?, ?, ?, 'summary', ?)",
+                [(tg_user_id, scope, item, now_iso()) for item in cleaned],
+            )
+        return len(cleaned)
 
     async def add_note(
         self,

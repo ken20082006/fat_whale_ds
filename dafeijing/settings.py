@@ -49,8 +49,12 @@ class Settings(BaseSettings):
     # ── 長期記憶 ──
     # 自動從對話中抽取關於使用者的事實，使用者不必手動 /remember
     auto_memory: bool = True
-    # 每個場合（私聊、各群組）各自的筆記上限，超過就丟最舊的
-    notes_per_scope_max: int = 40
+    # 單一場合的筆記上限（硬性backstop），超過就丟最舊的
+    notes_per_scope_max: int = 60
+    # 累積到這個數量就觸發整理，把零碎筆記合併壓縮
+    notes_consolidate_threshold: int = 25
+    # 整理後希望留下的則數
+    notes_consolidate_target: int = 12
 
     # ── Session ──
     # 模型有 1M 上下文，且輸入每百萬 token 僅 $0.1，所以視窗可以開得比一般保守值大。

@@ -26,7 +26,9 @@ class FakeCfg:
     group_cache_retention_hours = 72
     group_chain_max_messages = 20
     group_chain_max_tokens = 3000
-    notes_per_scope_max = 40
+    notes_per_scope_max = 60
+    notes_consolidate_threshold = 25
+    notes_consolidate_target = 12
     auto_memory = True
 
 
@@ -297,8 +299,8 @@ def test_group_reply_chain_resolution():
     asyncio.run(scenario())
 
 
-def test_notes_are_isolated_by_scope():
-    """私聊與各群組的筆記必須完全隔開，否則助理會說出私下講過的內容。"""
+def test_private_and_group_notes_are_isolated():
+    """私聊講的事不能流到群組，否則助理會在群裡說出朋友私下的內容。"""
     cfg = FakeCfg()
 
     async def scenario() -> None:
@@ -307,25 +309,83 @@ def test_notes_are_isolated_by_scope():
             sessions = SessionManager(db, cfg)
 
             await sessions.add_note(7, "私聊的事", scope="private")
-            await sessions.add_note(7, "A 群的事", scope="group:-100")
-            await sessions.add_note(7, "B 群的事", scope="group:-200")
+            await sessions.add_note(7, "群組的事", scope="group")
 
             assert await sessions.notes(7, "private") == ["私聊的事"]
-            assert await sessions.notes(7, "group:-100") == ["A 群的事"]
-            assert await sessions.notes(7, "group:-200") == ["B 群的事"]
+            assert await sessions.notes(7, "group") == ["群組的事"]
 
-            # 同一個人在不同場合各自獨立，不會互相污染
-            counts = dict(await sessions.note_counts(7))
-            assert counts == {"private": 1, "group:-100": 1, "group:-200": 1}
-
-            # 清掉一個場合不影響其他
-            assert await sessions.clear_notes(7, "group:-100") == 1
+            # 清掉一邊不影響另一邊
+            assert await sessions.clear_notes(7, "group") == 1
             assert await sessions.notes(7, "private") == ["私聊的事"]
-            assert await sessions.notes(7, "group:-100") == []
+            assert await sessions.notes(7, "group") == []
 
-            # 清全部
-            assert await sessions.clear_notes(7, None) == 2
+            assert await sessions.clear_notes(7, None) == 1
             assert await sessions.note_counts(7) == []
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_group_notes_are_shared_across_all_groups():
+    """所有群組共用一份筆記 —— 在 A 群講的事，在 B 群也該被記得。"""
+    from dafeijing.core.session import GROUP_SCOPE, PRIVATE_SCOPE, scope_for
+
+    # scope 只由「是不是群組」決定，與是哪個群組無關
+    assert scope_for(is_group=True) == GROUP_SCOPE
+    assert scope_for(is_group=False) == PRIVATE_SCOPE
+    assert scope_for(is_group=True) == scope_for(is_group=True)
+
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            a_group = scope_for(is_group=True)
+            b_group = scope_for(is_group=True)
+            assert a_group == b_group
+
+            await sessions.add_note(7, "在 A 群講的事", scope=a_group)
+            assert await sessions.notes(7, b_group) == ["在 A 群講的事"]
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_replace_notes():
+    """定期整理時整批換掉筆記。"""
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            for index in range(5):
+                await sessions.add_note(7, f"零碎的事 {index}", scope="group")
+
+            written = await sessions.replace_notes(
+                7, "group", ["他是後端工程師", "正在學 Rust", "偏好簡短回答"]
+            )
+            assert written == 3
+            assert await sessions.notes(7, "group") == [
+                "他是後端工程師",
+                "正在學 Rust",
+                "偏好簡短回答",
+            ]
+
+            # 不影響另一個場合
+            await sessions.add_note(7, "私聊的事", scope="private")
+            await sessions.replace_notes(7, "group", ["只剩這則"])
+            assert await sessions.notes(7, "private") == ["私聊的事"]
+            assert await sessions.notes(7, "group") == ["只剩這則"]
+
+            # 空清單不該把筆記清光
+            assert await sessions.replace_notes(7, "group", []) == 0
+            assert await sessions.notes(7, "group") == ["只剩這則"]
 
             await db.close()
 
@@ -356,15 +416,6 @@ def test_note_dedup_and_cap():
             await db.close()
 
     asyncio.run(scenario())
-
-
-def test_scope_for():
-    from dafeijing.core.session import scope_for
-
-    assert scope_for(is_group=False, chat_id=123) == "private"
-    assert scope_for(is_group=True, chat_id=-100) == "group:-100"
-    # 沒有 chat_id 時退回私聊，不要產生半截的 scope
-    assert scope_for(is_group=True, chat_id=None) == "private"
 
 
 def test_schema_includes_reasoning_columns():

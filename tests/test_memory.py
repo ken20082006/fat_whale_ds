@@ -42,9 +42,14 @@ def test_parse_skips_duplicates_within_output():
     assert _parse("小明\n小明", []) == ["小明"]
 
 
-def test_parse_caps_at_three():
+def test_parse_caps_at_three_by_default():
     raw = "\n".join(f"事實 {index}" for index in range(10))
     assert len(_parse(raw, [])) == 3
+
+
+def test_parse_limit_is_configurable_for_consolidation():
+    raw = "\n".join(f"事實 {index}" for index in range(30))
+    assert len(_parse(raw, [], limit=12)) == 12
 
 
 def test_parse_rejects_overly_long_lines():

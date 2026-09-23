@@ -44,7 +44,26 @@ class Database:
         await self._conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         await self._add_missing_columns()
         await self._conn.commit()
+        await self._migrate_data()
         logger.info("資料庫就緒：%s", self._path)
+
+    async def _migrate_data(self) -> None:
+        """一次性資料搬移。每項都要能重複執行而不出錯。"""
+        # 舊版的長期筆記以 'group:<chat_id>' 一個群組一份，
+        # 現在改成所有群組共用一份。
+        merged = await self.affect(
+            "UPDATE memory_notes SET scope = 'group' WHERE scope LIKE 'group:%'"
+        )
+        if merged:
+            logger.info("長期筆記場合合併：%d 則改為群組共用", merged)
+
+            # 合併後同一個人可能在不同群組記過同一件事，去重
+            removed = await self.affect(
+                "DELETE FROM memory_notes WHERE id NOT IN ("
+                "SELECT MIN(id) FROM memory_notes GROUP BY user_id, scope, content)"
+            )
+            if removed:
+                logger.info("長期筆記去重：移除 %d 則重複", removed)
 
     async def _add_missing_columns(self) -> None:
         """既有的資料庫不會因為新增欄位而重建，這裡補上缺的。

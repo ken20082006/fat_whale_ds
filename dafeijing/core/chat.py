@@ -63,8 +63,8 @@ class ChatService:
         else:
             reasoning = self._cfg.reasoning_enabled
 
-        # 長期筆記依場合分開：私聊的筆記不會流進群組，反之亦然
-        scope = scope_for(req.is_group, req.chat_id)
+        # 長期筆記只有兩種場合：私聊獨立，所有群組共用。見 scope_for 的說明。
+        scope = scope_for(req.is_group)
         notes = await self._sessions.notes(req.tg_user_id, scope)
 
         system_prompt = self._persona.build(
