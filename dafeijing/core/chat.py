@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from ..llm.openrouter import LLMResult, OpenRouterClient
 from .access import AccessControl
 from .media import PreparedImage
+from .memory import MemoryExtractor
 from .persona import Persona, PersonaContext
-from .session import SessionManager, SessionRef
+from .session import SessionManager, SessionRef, scope_for
 from .usage import UsageLog
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class ChatService:
         access: AccessControl,
         llm: OpenRouterClient,
         usage: UsageLog,
+        memory: MemoryExtractor,
     ) -> None:
         self._cfg = cfg
         self._persona = persona
@@ -47,6 +49,7 @@ class ChatService:
         self._access = access
         self._llm = llm
         self._usage = usage
+        self._memory = memory
 
     async def respond(self, req: ChatRequest) -> LLMResult:
         user = await self._access.get_user(req.tg_user_id)
@@ -58,9 +61,9 @@ class ChatService:
         else:
             reasoning = self._cfg.reasoning_enabled
 
-        notes: list[str] = []
-        if not req.is_group:
-            notes = await self._sessions.notes(req.tg_user_id)
+        # 長期筆記依場合分開：私聊的筆記不會流進群組，反之亦然
+        scope = scope_for(req.is_group, req.chat_id)
+        notes = await self._sessions.notes(req.tg_user_id, scope)
 
         system_prompt = self._persona.build(
             PersonaContext(
@@ -119,6 +122,15 @@ class ChatService:
             await self._sessions.maybe_compact(req.session.id, self._llm.summarise)
         except Exception:
             logger.exception("壓縮歷史失敗，不影響本次回覆")
+
+        # 背景抽取長期記憶。用 req.text 而非 user_content ——
+        # 群組的 user_content 是整條引用串，含其他人的發言，不該算在這個人頭上。
+        self._memory.schedule(
+            tg_user_id=req.tg_user_id,
+            scope=scope,
+            user_text=req.text or user_content,
+            assistant_text=result.text,
+        )
 
         logger.info(
             "%s → %d in / %d out（推理 %d、快取 %d）",

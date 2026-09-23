@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     admin_user_ids: str = ""
     invite_ttl_seconds: int = 300  # 邀請碼有效期，預設五分鐘
 
+    # ── 長期記憶 ──
+    # 自動從對話中抽取關於使用者的事實，使用者不必手動 /remember
+    auto_memory: bool = True
+    # 每個場合（私聊、各群組）各自的筆記上限，超過就丟最舊的
+    notes_per_scope_max: int = 40
+
     # ── Session ──
     # 模型有 1M 上下文，且輸入每百萬 token 僅 $0.1，所以視窗可以開得比一般保守值大。
     # 30 輪約一萬多 token，每個請求的輸入成本仍在千分之一美元量級。

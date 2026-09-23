@@ -19,6 +19,7 @@ from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.debounce import Debouncer
+from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
@@ -42,6 +43,7 @@ def create_services(cfg: Settings) -> Services:
     persona = Persona.load(cfg.persona_file)
     llm = OpenRouterClient(cfg)
     usage = UsageLog(db)
+    memory = MemoryExtractor(cfg, sessions, llm)
 
     return Services(
         cfg=cfg,
@@ -52,7 +54,8 @@ def create_services(cfg: Settings) -> Services:
         persona=persona,
         llm=llm,
         usage=usage,
-        chat=ChatService(cfg, persona, sessions, access, llm, usage),
+        chat=ChatService(cfg, persona, sessions, access, llm, usage, memory),
+        memory=memory,
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
@@ -177,6 +180,7 @@ async def _post_shutdown(application: Application) -> None:
         return
     logger.info("收工，關閉連線。")
     await svc.debouncer.drain()
+    await svc.memory.drain()  # 讓還在跑的記憶抽取寫完，免得白花一次呼叫
     await svc.llm.close()
     await svc.db.close()
 

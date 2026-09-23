@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 
 SummarizerFn = Callable[[str], Awaitable[str]]
 
+PRIVATE_SCOPE = "private"
+
+
+def scope_for(is_group: bool, chat_id: int | None) -> str:
+    """長期筆記的命名空間。
+
+    私聊與每個群組各自獨立 —— 私聊記的事絕不會在群組被讀到，
+    否則助理會不經意說出使用者私下講過的內容。
+    """
+    if is_group and chat_id is not None:
+        return f"group:{chat_id}"
+    return PRIVATE_SCOPE
+
 
 @dataclass(frozen=True)
 class SessionRef:
@@ -233,23 +246,74 @@ class SessionManager:
 
     # ── 長期記憶 ────────────────────────────────────────
 
-    async def notes(self, tg_user_id: int, limit: int = 40) -> list[str]:
+    async def notes(self, tg_user_id: int, scope: str = PRIVATE_SCOPE) -> list[str]:
         rows = await self._db.fetchall(
-            "SELECT content FROM memory_notes WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (tg_user_id, limit),
+            "SELECT content FROM memory_notes WHERE user_id = ? AND scope = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (tg_user_id, scope, self._cfg.notes_per_scope_max),
         )
         return [row["content"] for row in reversed(rows)]
 
-    async def add_note(self, tg_user_id: int, content: str, source: str = "explicit") -> None:
+    async def add_note(
+        self,
+        tg_user_id: int,
+        content: str,
+        *,
+        scope: str = PRIVATE_SCOPE,
+        source: str = "explicit",
+    ) -> bool:
+        """回傳是否真的寫入（空白或重複會被擋下）。"""
+        content = " ".join(content.split())[:500]
+        if not content:
+            return False
+        if await self._is_duplicate(tg_user_id, scope, content):
+            return False
+
         await self._db.execute(
-            "INSERT INTO memory_notes (user_id, content, source, created_at) VALUES (?, ?, ?, ?)",
-            (tg_user_id, content, source, now_iso()),
+            "INSERT INTO memory_notes (user_id, scope, content, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (tg_user_id, scope, content, source, now_iso()),
+        )
+        await self._trim_notes(tg_user_id, scope)
+        return True
+
+    async def _is_duplicate(self, tg_user_id: int, scope: str, content: str) -> bool:
+        existing = await self._db.fetchval(
+            "SELECT 1 FROM memory_notes WHERE user_id = ? AND scope = ? AND content = ?",
+            (tg_user_id, scope, content),
+            default=None,
+        )
+        return existing is not None
+
+    async def _trim_notes(self, tg_user_id: int, scope: str) -> None:
+        """超過上限就丟掉最舊的，避免筆記無限累積把 system prompt 撐大。"""
+        limit = self._cfg.notes_per_scope_max
+        await self._db.affect(
+            "DELETE FROM memory_notes WHERE user_id = ? AND scope = ? AND id NOT IN ("
+            "SELECT id FROM memory_notes WHERE user_id = ? AND scope = ? "
+            "ORDER BY id DESC LIMIT ?)",
+            (tg_user_id, scope, tg_user_id, scope, limit),
         )
 
-    async def clear_notes(self, tg_user_id: int) -> int:
+    async def clear_notes(self, tg_user_id: int, scope: str | None = None) -> int:
+        """scope 為 None 時清掉所有場合的筆記。"""
+        if scope is None:
+            return await self._db.affect(
+                "DELETE FROM memory_notes WHERE user_id = ?", (tg_user_id,)
+            )
         return await self._db.affect(
-            "DELETE FROM memory_notes WHERE user_id = ?", (tg_user_id,)
+            "DELETE FROM memory_notes WHERE user_id = ? AND scope = ?",
+            (tg_user_id, scope),
         )
+
+    async def note_counts(self, tg_user_id: int) -> list[tuple[str, int]]:
+        """各場合的筆記數量，供 /context 顯示。"""
+        rows = await self._db.fetchall(
+            "SELECT scope, COUNT(*) AS n FROM memory_notes WHERE user_id = ? "
+            "GROUP BY scope ORDER BY n DESC",
+            (tg_user_id,),
+        )
+        return [(row["scope"], row["n"]) for row in rows]
 
     # ── 內部 ────────────────────────────────────────────
 

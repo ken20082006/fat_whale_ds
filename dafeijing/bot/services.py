@@ -11,6 +11,7 @@ from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.debounce import Debouncer
+from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
@@ -34,6 +35,7 @@ class Services:
     debouncer: Debouncer
     limiter: RateLimiter
     group_access: MembershipCache
+    memory: MemoryExtractor
 
     bot_username: str = ""
     bot_id: int = 0

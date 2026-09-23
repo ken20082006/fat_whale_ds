@@ -26,6 +26,8 @@ class FakeCfg:
     group_cache_retention_hours = 72
     group_chain_max_messages = 20
     group_chain_max_tokens = 3000
+    notes_per_scope_max = 40
+    auto_memory = True
 
 
 async def _new_db(tmp: Path) -> Database:
@@ -36,7 +38,9 @@ async def _new_db(tmp: Path) -> Database:
 
 def test_invite_redeem_flow():
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             access = AccessControl(db)
 
@@ -68,7 +72,9 @@ def test_invite_redeem_flow():
 
 def test_invite_normalisation_and_expiry():
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             access = AccessControl(db)
 
@@ -99,7 +105,9 @@ def test_ensure_creates_row_for_admin_who_never_redeemed():
     """
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             access = AccessControl(db)
 
@@ -120,7 +128,9 @@ def test_ensure_creates_row_for_admin_who_never_redeemed():
 
 def test_ensure_does_not_downgrade_existing_user():
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             access = AccessControl(db)
 
@@ -143,7 +153,9 @@ def test_ensure_does_not_downgrade_existing_user():
 
 def test_group_whitelist():
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             access = AccessControl(db)
 
@@ -169,7 +181,9 @@ def test_session_window_and_soft_reset():
     cfg = FakeCfg()
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             sessions = SessionManager(db, cfg)
 
@@ -203,7 +217,9 @@ def test_undo_last_turn():
     cfg = FakeCfg()
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             sessions = SessionManager(db, cfg)
             session = await sessions.private_session(1)
@@ -224,7 +240,9 @@ def test_long_term_notes():
     cfg = FakeCfg()
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             sessions = SessionManager(db, cfg)
 
@@ -246,7 +264,9 @@ def test_group_reply_chain_resolution():
     cfg = FakeCfg()
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
             chain = ReplyChain(db, cfg)
 
@@ -273,9 +293,81 @@ def test_group_reply_chain_resolution():
     asyncio.run(scenario())
 
 
+def test_notes_are_isolated_by_scope():
+    """私聊與各群組的筆記必須完全隔開，否則助理會說出私下講過的內容。"""
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            await sessions.add_note(7, "私聊的事", scope="private")
+            await sessions.add_note(7, "A 群的事", scope="group:-100")
+            await sessions.add_note(7, "B 群的事", scope="group:-200")
+
+            assert await sessions.notes(7, "private") == ["私聊的事"]
+            assert await sessions.notes(7, "group:-100") == ["A 群的事"]
+            assert await sessions.notes(7, "group:-200") == ["B 群的事"]
+
+            # 同一個人在不同場合各自獨立，不會互相污染
+            counts = dict(await sessions.note_counts(7))
+            assert counts == {"private": 1, "group:-100": 1, "group:-200": 1}
+
+            # 清掉一個場合不影響其他
+            assert await sessions.clear_notes(7, "group:-100") == 1
+            assert await sessions.notes(7, "private") == ["私聊的事"]
+            assert await sessions.notes(7, "group:-100") == []
+
+            # 清全部
+            assert await sessions.clear_notes(7, None) == 2
+            assert await sessions.note_counts(7) == []
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_note_dedup_and_cap():
+    cfg = FakeCfg()
+    cfg.notes_per_scope_max = 3
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            sessions = SessionManager(db, cfg)
+
+            assert await sessions.add_note(7, "同樣的話") is True
+            assert await sessions.add_note(7, "同樣的話") is False  # 重複不寫
+            assert await sessions.add_note(7, "   ") is False  # 空白不寫
+
+            for index in range(5):
+                await sessions.add_note(7, f"事實 {index}")
+
+            notes = await sessions.notes(7)
+            assert len(notes) == 3  # 超過上限丟最舊的
+            assert "事實 4" in notes
+            assert "事實 0" not in notes
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_scope_for():
+    from dafeijing.core.session import scope_for
+
+    assert scope_for(is_group=False, chat_id=123) == "private"
+    assert scope_for(is_group=True, chat_id=-100) == "group:-100"
+    # 沒有 chat_id 時退回私聊，不要產生半截的 scope
+    assert scope_for(is_group=True, chat_id=None) == "private"
+
+
 def test_schema_includes_reasoning_columns():
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             db = await _new_db(Path(tmp))
 
             user_cols = {row[1] for row in await db.fetchall("PRAGMA table_info(users)")}
@@ -293,7 +385,9 @@ def test_migration_adds_columns_to_existing_db():
     """舊資料庫啟動時要自動補欄位，不能要求使用者重建。"""
 
     async def scenario() -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors：Windows 上 SQLite 的 -wal/-shm 有時仍被鎖住，
+        # 讓暫存目錄刪不掉。這與測試內容無關，不該讓它變成隨機失敗。
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "old.db"
 
             # 模擬上一個版本的資料庫：users 還沒有 reasoning 欄位

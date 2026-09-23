@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 
 from telegram import Message
 from telegram.constants import ChatAction, ParseMode
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
 from ..render import split_html, to_telegram_html
 from ..render.markdown import strip_markdown
@@ -62,9 +62,32 @@ async def _send_chunk(
     reply_to: int | None,
     fallback: str,
 ):
+    """先試 HTML；格式被拒就退回純文字。網路中斷則直接放棄這一則。"""
     for parse_mode, payload in ((ParseMode.HTML, chunk), (None, strip_markdown(fallback))):
         try:
-            kwargs = {"parse_mode": parse_mode} if parse_mode else {}
+            return await _send_with_retry(bot, chat_id, payload, parse_mode, reply_to)
+        except BadRequest as exc:
+            logger.warning("送出失敗（%s），改用純文字重試", exc)
+            continue
+        except NetworkError as exc:
+            # 網路問題換格式也沒用，別再白等一次逾時
+            logger.warning("傳送時網路中斷（%s），放棄這一則", exc)
+            return None
+
+    logger.error("兩種格式都送不出去，chat=%s", chat_id)
+    return None
+
+
+async def _send_with_retry(bot, chat_id: int, payload: str, parse_mode, reply_to: int | None):
+    """網路類錯誤重試一次；其餘直接往上拋交給呼叫端判斷。
+
+    傳送失敗在真實環境很常見（連線逾時、Telegram 暫時 5xx），
+    若不接住就會一路冒到全域錯誤處理，變成一則無意義的「未處理的例外」。
+    """
+    kwargs = {"parse_mode": parse_mode} if parse_mode else {}
+
+    for attempt in range(2):
+        try:
             return await bot.send_message(
                 chat_id,
                 payload,
@@ -74,10 +97,11 @@ async def _send_chunk(
             )
         except RetryAfter as exc:
             await asyncio.sleep(exc.retry_after + 1)
-        except BadRequest as exc:
-            logger.warning("HTML 送出失敗（%s），改用純文字", exc)
+        except NetworkError:
+            if attempt:
+                raise
+            await asyncio.sleep(1.0)
 
-    logger.error("訊息送出失敗，放棄。chat=%s", chat_id)
     return None
 
 

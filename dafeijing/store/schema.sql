@@ -53,14 +53,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 
 -- 跨 session 的長期記憶
+-- scope 把場合隔開：'private' 或 'group:<chat_id>'。
+-- 私聊記的事永遠不會在群組被讀到，反之亦然 —— 否則助理會脫口說出私下的內容。
 CREATE TABLE IF NOT EXISTS memory_notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL,
+    scope       TEXT    NOT NULL DEFAULT 'private',
     content     TEXT    NOT NULL,
     source      TEXT    NOT NULL DEFAULT 'explicit',    -- explicit | auto
     created_at  TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_notes_user ON memory_notes(user_id);
+CREATE INDEX IF NOT EXISTS idx_notes_user ON memory_notes(user_id, scope);
 
 -- 群組訊息短期快取，供回溯引用鏈。逾時自動清除，永不送進模型。
 CREATE TABLE IF NOT EXISTS group_cache (

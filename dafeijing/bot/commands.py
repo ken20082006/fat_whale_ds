@@ -12,13 +12,31 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from ..core.access import RedeemStatus
+from ..core.session import PRIVATE_SCOPE, scope_for
 from ..core.util import humanise_age, truncate
-from ..core.tokens import estimate_tokens
 from .services import Services
 
 logger = logging.getLogger(__name__)
 
 VALID_VIBES = ("low", "mid", "high")
+
+
+def _current_scope(update: Update) -> str:
+    chat = update.effective_chat
+    return scope_for(chat.type != ChatType.PRIVATE, chat.id)
+
+
+async def _scope_label(svc: Services, scope: str) -> str:
+    if scope == PRIVATE_SCOPE:
+        return "私聊"
+    try:
+        chat_id = int(scope.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return scope
+    title = await svc.db.fetchval(
+        "SELECT title FROM groups WHERE chat_id = ?", (chat_id,), default=None
+    )
+    return f"群組「{title}」" if title else f"群組 {chat_id}"
 
 
 def _reasoning_label(value: int | None) -> str:
@@ -108,9 +126,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /export — 把這段對話匯出成檔案\n\n"
         "偏好\n"
         "  /vibe low | mid | high — 調整本鯨的演出濃度\n"
-        "  /think on | off | auto — 深度思考開關\n"
+        "  /think on | off | auto — 深度思考開關\n\n"
+        "記憶\n"
         "  /remember <內容> — 要本鯨長期記住這件事\n"
-        "  /forget — 清掉長期記憶\n\n"
+        "  /forget — 清掉這個場合的筆記\n"
+        "  /forget all — 清掉所有場合的筆記\n"
+        "  本鯨也會自己從對話裡記住關於你的事。\n"
+        "  私聊與各群組的筆記各自獨立，不會互通。\n\n"
         "其他\n"
         "  /quota — 查自己的用量\n"
         "  /id — 查自己的 Telegram id\n"
@@ -174,14 +196,15 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     session = await svc.sessions.private_session(user.id)
     window = await svc.sessions.window(session.id)
     tokens = await svc.sessions.window_tokens(session.id)
-    notes = await svc.sessions.notes(user.id)
+    notes = await svc.sessions.notes(user.id, PRIVATE_SCOPE)
+    counts = await svc.sessions.note_counts(user.id)
     row = await svc.access.get_user(user.id) or {}
 
     lines = [
         "本鯨現在記得的東西：\n",
         f"短期　{len(window)} 則原文，約 {tokens} token",
         f"中期　摘要 {session.summary_tokens} token",
-        f"長期　{len(notes)} 則筆記",
+        f"長期　私聊 {len(notes)} 則筆記",
         f"濃度　{row.get('vibe') or 'mid'}",
         "思考　" + _reasoning_label(row.get("reasoning")),
         f"上次　{humanise_age(session.last_active_at)}",
@@ -189,10 +212,17 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if session.summary:
         lines.append(f"\n摘要節錄：\n{truncate(session.summary, 300)}")
     if notes:
-        lines.append("\n長期筆記：")
+        lines.append("\n私聊筆記：")
         lines.extend(f"  · {truncate(note, 80)}" for note in notes[:8])
         if len(notes) > 8:
             lines.append(f"  （另有 {len(notes) - 8} 則）")
+
+    # 各場合分開存，讓使用者看得見分布
+    others = [(scope, n) for scope, n in counts if scope != PRIVATE_SCOPE]
+    if others:
+        lines.append("\n其他場合（各自獨立，不會互通）：")
+        for scope, count in others:
+            lines.append(f"  · {await _scope_label(svc, scope)} — {count} 則")
 
     await update.effective_message.reply_text("\n".join(lines))
 
@@ -260,24 +290,48 @@ async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """在私聊與群組都能用，各自記進對應的場合。"""
     if not await ensure_active(update, context):
         return
     svc = get_services(context)
     content = " ".join(context.args).strip() if context.args else ""
     if not content:
-        await update.effective_message.reply_text("用法：/remember 你叫什麼、在做什麼之類的。")
+        await update.effective_message.reply_text(
+            "用法：/remember 你叫什麼、在做什麼之類的。\n"
+            "在群組裡記的只會在該群組生效，私聊記的不會外流。"
+        )
         return
-    await svc.sessions.add_note(update.effective_user.id, content[:500], source="explicit")
-    await update.effective_message.reply_text("記下了。")
+
+    scope = _current_scope(update)
+    written = await svc.sessions.add_note(
+        update.effective_user.id, content, scope=scope, source="explicit"
+    )
+    await update.effective_message.reply_text(
+        "記下了。" if written else "這條已經記過了。"
+    )
 
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await ensure_active(update, context):
         return
     svc = get_services(context)
-    removed = await svc.sessions.clear_notes(update.effective_user.id)
+    user = update.effective_user
+    argument = (context.args[0].lower() if context.args else "").strip()
+
+    if argument in ("all", "全部", "所有"):
+        removed = await svc.sessions.clear_notes(user.id, scope=None)
+        await update.effective_message.reply_text(
+            f"清掉全部 {removed} 則筆記。" if removed else "本來就沒有筆記。"
+        )
+        return
+
+    scope = _current_scope(update)
+    removed = await svc.sessions.clear_notes(user.id, scope)
+    where = await _scope_label(svc, scope)
     await update.effective_message.reply_text(
-        f"清掉 {removed} 則筆記。" if removed else "本來就沒有筆記。"
+        f"清掉{where}的 {removed} 則筆記。\n其他場合的筆記還在，要一起清就用 /forget all。"
+        if removed
+        else f"{where}本來就沒有筆記。"
     )
 
 

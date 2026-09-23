@@ -22,6 +22,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("users", "reasoning", "INTEGER"),
     ("usage_log", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("memory_notes", "scope", "TEXT NOT NULL DEFAULT 'private'"),
 )
 
 
@@ -62,9 +63,16 @@ class Database:
             logger.info("資料庫補上欄位：%s.%s", table, column)
 
     async def close(self) -> None:
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
+        if self._conn is None:
+            return
+        conn, self._conn = self._conn, None
+        try:
+            # 把 WAL 併回主檔並清空。否則會留下 -wal / -shm，
+            # 在 Windows 上這些檔案常被鎖住一段時間，刪除暫存目錄時會失敗。
+            await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            logger.debug("WAL checkpoint 失敗，不影響關閉")
+        await conn.close()
 
     @property
     def conn(self) -> aiosqlite.Connection:

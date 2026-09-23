@@ -65,7 +65,7 @@ def test_empty_notes_and_summary_are_omitted():
 
 
 def test_falls_back_to_example_when_missing():
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         example = Path(tmp) / "persona.example.md"
         example.write_text("這是範本內容。", encoding="utf-8")
         persona = Persona.load(Path(tmp) / "persona.md")
@@ -74,7 +74,7 @@ def test_falls_back_to_example_when_missing():
 
 
 def test_falls_back_to_builtin_when_nothing_exists():
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         persona = Persona.load(Path(tmp) / "persona.md")
         assert persona.source is None
         assert persona.body
