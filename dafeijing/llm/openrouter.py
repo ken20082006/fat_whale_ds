@@ -72,6 +72,7 @@ class OpenRouterClient:
         temperature: float = 1.0,
         reasoning: bool | None = None,
         web_search: bool = False,
+        search_results: int | None = None,
     ) -> LLMResult:
         payload = {
             "model": model or self._cfg.model,
@@ -93,7 +94,10 @@ class OpenRouterClient:
             plugin: dict = {
                 "id": "web",
                 "engine": self._cfg.search_engine,
-                "max_results": self._cfg.search_max_results,
+                # 撈幾多條由呼叫端逐次決定（判斷出來的搜尋力度），不是寫死。
+                # 外掛每次請求只搜一次、查詢由引擎自己從對話推導 —— 這個數字
+                # 是唯一能調召回率的地方，小眾名詞撈得少就會直接漏掉。
+                "max_results": search_results or self._cfg.search_max_results,
                 # 外掛的預設指示會要模型標出來源（格式像 `(網域 (網址))`），
                 # 那是它的預設行為，不是模型自己愛貼。這裡直接覆蓋掉。
                 "search_prompt": (

@@ -43,7 +43,8 @@ _ROUTE_INSTRUCTIONS = (
     "判斷這一則應該怎樣處理。"
     "direct：打招呼、閒聊、情緒抒發、單一事實查詢 —— 直接答就好。"
     "reason：多步計算、邏輯推演、取捨比較、除錯 —— 要先想清楚才答得好。"
-    "search：問的是會隨時間變的事（新聞、版本、價格、日期、賽果），"
+    "search：問的是會隨時間變的事（新聞、版本、價格、日期、賽果）；"
+    "要確認某樣嘢係唔係真嘅（某個型號、產品、人物、事件係唔係存在）；"
     "或者對方明講要你上網查。"
     "search_reason：既要查證、又要推理才答得好。"
 )
@@ -52,9 +53,27 @@ _ROUTE_INSTRUCTIONS = (
 _DEPTH_CRITERIA = ["唔使想，直接答", "要想一陣先答", "要逐步推演先答得好"]
 _TONE_CRITERIA = ["收起演出，正經答", "正常", "放開玩，多啲角色演出"]
 
+# 搜尋力度。搜尋引擎每次請求只搜一次、查詢由引擎自己推導，所以「搜幾多條」
+# 是唯一能調召回率的旋鈕 —— 小眾或冷門的關鍵詞要撈多幾條才撞得中。
+EFFORT_QUICK = "quick"
+EFFORT_NORMAL = "normal"
+EFFORT_THOROUGH = "thorough"
+
+_EFFORT_INSTRUCTIONS = (
+    "判斷要回答這一則，網上要撈幾多資料才夠。"
+    "quick：查一個明確的事實就夠（某日天氣、某個價位）。"
+    "normal：一般查證。"
+    "thorough：小眾、冷門、或者可能唔存在嘅名詞；又或者講法有分歧、"
+    "需要多角度對照。呢類撈得少就會漏。"
+)
+
+# 只要有一個問題認不出來就回 None，由呼叫端決定後備 —— 不要在這裡偷偷選一個。
+_EFFORT_LEVELS = (EFFORT_QUICK, EFFORT_NORMAL, EFFORT_THOROUGH)
+
 _Q_ROUTE = "route"
 _Q_DEPTH = "depth"
 _Q_TONE = "tone"
+_Q_EFFORT = "search_effort"
 
 
 @dataclass(frozen=True)
@@ -68,6 +87,9 @@ class Assessment:
     route: str | None = None
     depth: float | None = None       # 0.0–1.0，越大越需要思考
     tone: float | None = None        # 0.0–1.0，越大越可以放開演出
+    # 要搜的話，撈幾多資料才夠。搜尋引擎每次請求只搜一次、查詢由引擎自己
+    # 推導，所以這是唯一能調召回率的旋鈕。
+    search_effort: str | None = None
     cost: float = 0.0
     model: str = ""
     confidence: dict[str, float] = None  # type: ignore[assignment]
@@ -120,6 +142,20 @@ def route_flags(route: str | None) -> tuple[bool | None, bool | None]:
     if route == ROUTE_SEARCH_REASON:
         return True, True
     return None, None
+
+
+def search_results(effort: str | None, quick: int, normal: int, thorough: int) -> int:
+    """把搜尋力度映射成要撈幾條結果。
+
+    認不出來就用中間值 —— 這是後備，不是判斷結果。搜尋引擎每次請求只搜
+    一次、查詢由引擎自己推導，所以撈幾多條是唯一能調召回率的旋鈕：
+    小眾或冷門的關鍵詞要撈多幾條才撞得中。
+    """
+    if effort == EFFORT_QUICK:
+        return quick
+    if effort == EFFORT_THOROUGH:
+        return thorough
+    return normal
 
 
 def budget_factor(depth: float | None, low: float, high: float) -> float:
@@ -198,6 +234,15 @@ class DecisionsClient:
                 "instructions": "要好好回答這一則，需要思考到什麼程度",
                 "criteria": list(_DEPTH_CRITERIA),
             },
+            _Q_EFFORT: {
+                "type": "choice",
+                "instructions": _EFFORT_INSTRUCTIONS,
+                "criteria": {
+                    EFFORT_QUICK: "一個明確的事實就夠",
+                    EFFORT_NORMAL: "一般查證",
+                    EFFORT_THOROUGH: "小眾冷門、或者講法有分歧，撈少會漏",
+                },
+            },
         }
         if want_tone:
             questions[_Q_TONE] = {
@@ -221,16 +266,22 @@ class DecisionsClient:
         else:
             tone, tone_conf = None, 0.0
 
+        effort, effort_conf = self._read_choice(answers.get(_Q_EFFORT), min_conf)
+        if effort not in _EFFORT_LEVELS:
+            effort = None
+
         return Assessment(
             route=route,
             depth=depth,
             tone=tone,
+            search_effort=effort,
             cost=float(usage.get("cost") or 0.0),
             model=str(data.get("model") or ""),
             confidence={
                 _Q_ROUTE: route_conf,
                 _Q_DEPTH: depth_conf,
                 _Q_TONE: tone_conf,
+                _Q_EFFORT: effort_conf,
             },
         )
 

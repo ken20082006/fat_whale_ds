@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     # fast 對 exa 與 parallel 都有效；留空則用引擎預設（較貴）。
     search_engine_mode: str = "fast"
     search_max_results: int = 5
+    # 判斷說「一個明確事實就夠」時撈幾條；說「小眾冷門、撈少會漏」時撈幾條。
+    # 中間值就是上面的 search_max_results。
+    #
+    # 撈幾多條是唯一能調召回率的旋鈕 —— 外掛每次請求只搜一次，查詢由引擎
+    # 自己從對話推導，模型無權指定。小眾名詞（例如某個型號名是否存在）
+    # 撈得少就會直接漏掉。
+    search_results_quick: int = 3
+    search_results_thorough: int = 10
     # 一則訊息最多讀幾個對方貼的連結
     fetch_max_urls: int = 3
 

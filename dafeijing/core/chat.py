@@ -14,6 +14,7 @@ from ..llm.decisions import (
     budget_factor,
     resolve_reasoning,
     route_flags,
+    search_results,
     tone_vibe,
 )
 from ..llm.openrouter import LLMResult, OpenRouterClient
@@ -24,7 +25,7 @@ from .persona import Persona, PersonaContext
 from .security import LEAK_REPLY, find_system_leak
 from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
-from .util import today_text
+from .util import today_text, truncate
 from .webfetch import (
     extract_search_marker,
     fetch_all,
@@ -48,6 +49,24 @@ VIBE_ORDER = ("low", "mid", "high")
 def _fmt_score(value: float | None) -> str:
     """日誌用。沒判斷到就寫 —，不要寫 None。"""
     return "—" if value is None else f"{value:.2f}"
+
+
+def build_state(text: str, recent: list[dict], limit: int = 300) -> str:
+    """組成判斷要看的內容。
+
+    **要帶上一輪對話。** 短追問單獨看會失真 ——「iphone duo喎」單獨看只是
+    一個三個字的片段，判斷成「直接答」；帶上「上一句問緊開賣日期」之後
+    才會判斷成「要搜尋」。實測：單獨 direct（信心 0.81）、帶上文 search。
+    沒有上文的話，使用者追問一次就等於白問。
+    """
+    if not recent:
+        return text
+    lines = [
+        f"{'使用者' if item.get("role") == "user" else "助理"}："
+        f"{truncate(item.get("content") or "", limit)}"
+        for item in recent
+    ]
+    return "上一輪對話：\n" + "\n".join(lines) + f"\n\n使用者現在說：{text}"
 
 
 @dataclass
@@ -105,15 +124,17 @@ class ChatService:
         self.web_searches = 0
         self.fetched_pages = 0
 
-    async def _assess(self, text: str) -> Assessment | None:
-        """一次問齊：怎麼處理、要幾深、幾放開。
+    async def _assess(self, text: str, session_id: int) -> Assessment | None:
+        """一次問齊：怎麼處理、要幾深、幾放開、要撈幾多。
 
-        只餵「對方自己這一句」。群組的引用串是別人講的話，拿它來判斷
-        等於替整個群組查、替別人講過的話查。
+        只看「對方自己這一句」再加**上一輪**：群組的引用串是別人講的話，
+        拿整條來判斷等於替整個群組查；但完全不帶上文的話，短追問會失真
+        （見 build_state）。
         """
         if not text.strip():
             return None
-        return await self._decisions.assess(text)
+        recent = await self._sessions.recent_messages(session_id, 2)
+        return await self._decisions.assess(build_state(text, recent))
 
     def _pick_reasoning(self, user, route: str | None) -> bool:
         """個人指定 > 路由判斷 > 全域後備。"""
@@ -153,11 +174,20 @@ class ChatService:
 
         # 一個呼叫同時問齊三件事，取代舊的 regex 搜尋閘與「讓主模型自己
         # 決定」的標記重跑。那兩個閘為什麼失效，見 TODO.md。
-        assessment = await self._assess(trigger_text)
+        assessment = await self._assess(trigger_text, req.session.id)
         route = assessment.route if assessment else None
 
         reasoning = self._pick_reasoning(user, route)
         search = self._pick_search(req, route)
+
+        # 要撈幾多條由判斷決定。外掛每次請求只搜一次、查詢由引擎自己從
+        # 對話推導，這是唯一能調召回率的地方 —— 小眾名詞撈得少就會漏。
+        wanted_results = search_results(
+            assessment.search_effort if assessment else None,
+            self._cfg.search_results_quick,
+            self._cfg.search_max_results,
+            self._cfg.search_results_thorough,
+        )
 
         # 逐則把演出收窄（只降不升）。人設原本就寫「對方情緒低落時收起
         # 角色扮演」，這裡把那條規則做成明確信號，不必靠主模型自己察覺。
@@ -166,12 +196,13 @@ class ChatService:
 
         if assessment:
             logger.info(
-                "判斷 route=%s depth=%s tone=%s → 推理%s、搜尋%s（%s）",
+                "判斷 route=%s depth=%s tone=%s effort=%s → 推理%s、搜尋%s（%s）",
                 route,
                 _fmt_score(assessment.depth),
                 _fmt_score(assessment.tone),
+                assessment.search_effort or "—",
                 "開" if reasoning else "關",
-                "開" if search else "關",
+                f"開（{wanted_results} 條）" if search else "關",
                 trigger_text[:20].replace("\n", " "),
             )
         if search:
@@ -289,7 +320,11 @@ class ChatService:
             )
 
         result = await self._llm.chat(
-            messages, max_tokens=max_tokens, reasoning=reasoning, web_search=search
+            messages,
+            max_tokens=max_tokens,
+            reasoning=reasoning,
+            web_search=search,
+            search_results=wanted_results,
         )
 
         # 模型自己要求搜尋：它只回了一行標記時，帶著外掛重跑一次。
@@ -320,6 +355,7 @@ class ChatService:
                 max_tokens=max_tokens,
                 reasoning=reasoning,
                 web_search=True,
+                search_results=wanted_results,
             )
 
         # 先把標記拿掉 —— 那是給系統看的，不能留在訊息裡。

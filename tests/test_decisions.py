@@ -5,6 +5,9 @@
 """
 
 from dafeijing.llm.decisions import (
+    EFFORT_NORMAL,
+    EFFORT_QUICK,
+    EFFORT_THOROUGH,
     ROUTE_DIRECT,
     ROUTE_REASON,
     ROUTE_SEARCH,
@@ -12,6 +15,7 @@ from dafeijing.llm.decisions import (
     budget_factor,
     resolve_reasoning,
     route_flags,
+    search_results,
     tone_vibe,
 )
 
@@ -76,6 +80,21 @@ def test_budget_factor_clamps_out_of_range_values():
 
 def test_budget_factor_leaves_the_budget_alone_when_there_is_no_score():
     assert budget_factor(None, 1.2, 1.8) == 1.0
+
+
+# ── search_results：搜尋力度 → 撈幾多條 ─────────────
+
+
+def test_search_results_maps_each_effort_level():
+    assert search_results(EFFORT_QUICK, 3, 5, 10) == 3
+    assert search_results(EFFORT_NORMAL, 3, 5, 10) == 5
+    assert search_results(EFFORT_THOROUGH, 3, 5, 10) == 10
+
+
+def test_unknown_effort_falls_back_to_the_middle():
+    """認不出來就用中間值 —— 這是後備，不是判斷結果。"""
+    assert search_results(None, 3, 5, 10) == 5
+    assert search_results("亂寫的", 3, 5, 10) == 5
 
 
 # ── tone_vibe：演出只降不升 ─────────────────────────
