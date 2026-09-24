@@ -98,11 +98,17 @@ _WEBM_MAGIC = b"\x1a\x45\xdf\xa3"  # EBML，webm / mkv
 
 @dataclass(frozen=True)
 class VideoNote:
-    """外援模型看完一段動態素材之後的解說。"""
+    """外援模型看完一段動態素材之後的解說。
 
-    text: str
+    `text` 為空而 `skipped` 有值時，代表**刻意沒有外包**（太長或太大）。
+    呼叫端應該把那句話講給使用者聽，而不是靜靜退回抽格 —— 否則對方
+    會以為整段都被看過了，而實際上我們只看得到幾格。
+    """
+
+    text: str = ""
     cost: float = 0.0
     model: str = ""
+    skipped: str = ""
 
 
 def is_motion(picked: "Picked") -> bool:
@@ -137,11 +143,13 @@ async def describe_video(bot, picked: "Picked", cfg, llm) -> VideoNote | None:
 
     if declared is not None and declared > limit:
         logger.info("影片過大，不做外包解說：%d bytes", declared)
-        return None
+        return VideoNote(skipped="影片太大，外包不划算")
     # 影片輸入按秒計費，比抽格貴得多。
     if picked.clip_seconds and picked.clip_seconds > cfg.video_delegate_max_seconds:
         logger.info("影片過長，不做外包解說：%.0f 秒", picked.clip_seconds)
-        return None
+        return VideoNote(
+            skipped=f"影片長過 {int(cfg.video_delegate_max_seconds)} 秒，外包不划算"
+        )
 
     try:
         blob = await _download(bot, file_id, max_bytes=limit)

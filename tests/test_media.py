@@ -489,21 +489,21 @@ def test_describe_video_is_skipped_when_disabled():
     assert asyncio.run(media.describe_video(None, picked, cfg, object())) is None
 
 
-def test_describe_video_gives_up_on_oversize_or_overlong_clips():
-    """外包是加分項，不是必要路徑 —— 太大或太長就安靜地退回抽格。
+def test_describe_video_reports_why_it_skipped_instead_of_failing_silently():
+    """太大或太長是**刻意的決定**（省錢），不是失敗 —— 所以要帶一句話出來。
 
-    影片輸入按秒計費，比抽格貴十幾倍，所以長度上限就是成本槓桿。
+    靜靜退回抽格的話，使用者會以為整段都被看過了，而實際上只看得到幾格。
+    兩種原因要分開講，因為大小上限往往比長度上限更早觸發（一條 5 分鐘的
+    720p 片通常遠超 10MB），使用者才知是哪一種。
     """
     # 宣告大小就超標 → 連下載都不必
     too_big = Picked("f", "video", clip_file_id="c", clip_bytes=4096, clip_seconds=5.0)
-    assert (
-        asyncio.run(media.describe_video(None, too_big, _DelegateCfg(), object()))
-        is None
-    )
+    note = asyncio.run(media.describe_video(None, too_big, _DelegateCfg(), object()))
+    assert note is not None and not note.text
+    assert "太大" in note.skipped
 
-    # 太長 → 同理
+    # 太長 → 同理，但講的是長度
     too_long = Picked("f", "video", clip_file_id="c", clip_bytes=512, clip_seconds=600.0)
-    assert (
-        asyncio.run(media.describe_video(None, too_long, _DelegateCfg(), object()))
-        is None
-    )
+    note = asyncio.run(media.describe_video(None, too_long, _DelegateCfg(), object()))
+    assert note is not None and not note.text
+    assert "長過" in note.skipped

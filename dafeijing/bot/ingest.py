@@ -36,6 +36,8 @@ async def collect(
     # 主要這一則自己貢獻了幾張。標註要寫對格數，所以得和引用的那一則分開算。
     own_count = 0
     own_note: media.VideoNote | None = None
+    # 刻意沒外包的原因（太長／太大）。有值就要講給使用者聽。
+    own_skip = ""
 
     targets = [message]
     if include_reply and message.reply_to_message is not None:
@@ -65,11 +67,16 @@ async def collect(
         if media.is_motion(picked):
             note = await media.describe_video(bot, picked, cfg, llm)
 
-        if note is not None:
+        if note is not None and note.text:
             # 外包成功就**不再送圖** —— 解說已經涵蓋畫面內容，而且更省 token。
             if target is message:
                 own_note = note
             continue
+
+        # 沒外包成功就照舊抽格。「太長／太大」是刻意的決定（省錢），要記下來
+        # 講給使用者聽；呼叫失敗則不必提 —— 那是我們自己的問題。
+        if note is not None and note.skipped and target is message:
+            own_skip = note.skipped
 
         try:
             collected = await media.collect_media(bot, picked, cfg)
@@ -94,6 +101,10 @@ async def collect(
         hint = f"{media.describe(message, frames=None)}\n〔內容：{own_note.text}〕"
     elif own_count:
         hint = media.describe(message, frames=own_count)
+        if own_skip:
+            # 刻意沒外包就講出來 —— 否則對方會以為整段都被看過了，
+            # 而實際上只看得到幾格。
+            hint = f"{hint}\n〔{own_skip}〕"
     if hint:
         text = f"{text}\n{hint}".strip() if text else hint
 

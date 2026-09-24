@@ -198,16 +198,20 @@ class Settings(BaseSettings):
     video_delegate_model: str = "google/gemini-3.5-flash-lite"
 
     # **影片輸入按秒計費**：Gemini 預設每秒抽一格、每格約 260 token，所以
-    # 60 秒約 15,600 token ≈ $0.0047（flash-lite $0.30/M）。抽格那條路只花
-    # 約 3 張圖 ≈ 3,000 token ≈ $0.0004 —— 外包貴十幾倍。
+    # 300 秒約 78,000 token ≈ $0.023（flash-lite $0.30/M）。抽格那條路只花
+    # 約 3 張圖 ≈ 3,000 token ≈ $0.0004 —— 外包貴幾十倍。
     #
-    # 所以長度上限就是成本槓桿：60 秒的最壞情況是半仙美元，而一般 GIF
-    # 只花約 $0.0008。更長的就退回抽格（讀少幾格，總比不讀好）。
-    video_delegate_max_seconds: float = 60.0
+    # 上限 300 秒（5 分鐘）是有意識的取捨：一條 5 分鐘片的外包費約兩仙
+    # 美元。超過就**不做外包，而且會講出來**（見 media.VideoNote.skipped）——
+    # 使用者才知道我們只看到幾格，而不是以為整段都被看過了。
+    video_delegate_max_seconds: float = 300.0
 
     # 大小上限跟 token 無關，是為了請求本身：base64 會脹約三分之一，
     # 10MB 的片變成約 13MB 的 JSON，而 Gemini 的 inline 上限是 20MB ——
-    # 留一點餘量給 prompt 與編碼開銷。超過就退回抽格。
+    # 留一點餘量給 prompt 與編碼開銷。超過也一樣會講出來。
+    #
+    # 注意這個上限往往比長度上限更早觸發：一條 5 分鐘的 720p 片通常遠超
+    # 10MB，所以「太長」與「太大」的訊息要分開講，使用者才知是哪一種。
     video_delegate_max_bytes: int = 10 * 1024 * 1024
 
     # 解說的長度。它會落庫（成為對話紀錄的一部分），所以要有界。
