@@ -89,6 +89,7 @@ class ChatService:
         memory: MemoryExtractor,
         stickers: StickerLibrary,
         decisions: DecisionsClient,
+        profiler,
     ) -> None:
         self._cfg = cfg
         self._persona = persona
@@ -99,6 +100,7 @@ class ChatService:
         self._memory = memory
         self._stickers = stickers
         self._decisions = decisions
+        self._profiler = profiler
         self.blocked_leaks = 0
         self.web_searches = 0
         self.fetched_pages = 0
@@ -190,6 +192,13 @@ class ChatService:
             if other:
                 others_notes.append((person.name, other))
 
+        # 群組概況：這個群體本身的樣貌。與筆記不同，它不屬於任何一個人，
+        # 所以不分發言者是誰都會載入。見 core/groupprofile.py。
+        group_profile = None
+        if req.is_group:
+            row = await self._sessions.get_group_profile(req.chat_id)
+            group_profile = row["content"] if row else None
+
         system_prompt = self._persona.build(
             PersonaContext(
                 vibe=vibe,
@@ -202,6 +211,7 @@ class ChatService:
                     self._cfg.timezone_offset_hours, self._cfg.timezone_label
                 ),
                 others_notes=others_notes,
+                group_profile=group_profile,
                 can_search=self._cfg.search_mode != "off",
                 can_fetch=self._cfg.fetch_max_urls > 0,
                 self_search=self._cfg.search_mode not in ("off", "always"),
@@ -366,6 +376,11 @@ class ChatService:
             assistant_text=result.text,
             people=req.people,
         )
+
+        # 群組概況。累積夠多新的交流、而且距離上次夠久才會真的跑 ——
+        # 判斷在 profiler 裡面，這裡只是舉手。見 core/groupprofile.py。
+        if req.is_group:
+            self._profiler.schedule(req.chat_id)
 
         logger.info(
             "%s → %d in / %d out（推理 %d、快取 %d）%s%s",

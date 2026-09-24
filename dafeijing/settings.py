@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     # 整理後希望留下的則數
     notes_consolidate_target: int = 12
 
+    # ── 群組概況 ──────────────────────────────────────────
+    # 每個群一則「這個群體本身」的概況（主題、氣氛、慣例），見
+    # core/groupprofile.py。與 memory_notes 不同，它不屬於任何一個人。
+    #
+    # 素材限於機器人親自參與過的交流（被 @ 或被回覆的那些），所以累積得慢，
+    # 門檻不必高。
+    group_profile_enabled: bool = True
+    group_profile_min_exchanges: int = 8
+    group_profile_max_exchanges: int = 60
+    # 太頻繁更新只會讓概況跳來跳去，而且每次都多付一次模型呼叫。
+    group_profile_min_hours: float = 6.0
+    # 長度上限。刻意短 —— 它每次群組回覆都會進 system prompt。
+    group_profile_max_chars: int = 600
+
     # ── Session ──
     # 模型有 1M 上下文，且輸入每百萬 token 僅 $0.1，所以視窗可以開得比一般保守值大。
     # 30 輪約一萬多 token，每個請求的輸入成本仍在千分之一美元量級。

@@ -19,6 +19,7 @@ from telegram.ext import (
 from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
+from ..core.groupprofile import GroupProfiler
 from ..core.debounce import Debouncer
 from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
@@ -48,6 +49,7 @@ def create_services(cfg: Settings) -> Services:
     usage = UsageLog(db)
     decisions = DecisionsClient(cfg)
     memory = MemoryExtractor(cfg, sessions, llm, decisions)
+    profiler = GroupProfiler(cfg, sessions, llm)
     stickers = StickerLibrary(cfg)
 
     return Services(
@@ -61,9 +63,19 @@ def create_services(cfg: Settings) -> Services:
         usage=usage,
         decisions=decisions,
         chat=ChatService(
-            cfg, persona, sessions, access, llm, usage, memory, stickers, decisions
+            cfg,
+            persona,
+            sessions,
+            access,
+            llm,
+            usage,
+            memory,
+            stickers,
+            decisions,
+            profiler,
         ),
         memory=memory,
+        profiler=profiler,
         stickers=stickers,
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
@@ -211,6 +223,7 @@ async def _post_shutdown(application: Application) -> None:
     logger.info("收工，關閉連線。")
     await svc.debouncer.drain()
     await svc.memory.drain()  # 讓還在跑的記憶抽取寫完，免得白花一次呼叫
+    await svc.profiler.drain()  # 群組概況同理
     await svc.llm.close()
     await svc.decisions.close()
     await svc.db.close()

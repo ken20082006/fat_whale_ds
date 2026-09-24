@@ -125,3 +125,20 @@ CREATE TABLE IF NOT EXISTS usage_log (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_log(created_at);
+
+-- 群組概況。每個群一則，描述「這個群體本身」—— 主題、氣氛、慣例、近期話題。
+--
+-- 與 memory_notes 的分別：筆記是「關於某個人」的事實，每一則都屬於一個
+-- user_id；概況是「關於這個群」的，不屬於任何人。兩者需要的東西不同，
+-- 所以分開存，而不是把 memory_notes.user_id 改成可為 NULL。
+--
+-- 素材限於**機器人親自參與過的交流**（被 @ 或被回覆的那些），不會把它
+-- 在 group_cache 裡旁觀到的內容沉澱成永久記錄 —— 那些只保留 72 小時。
+--
+-- content 是一段概況文字而不是一條條筆記，所以天生有界，不需要濃縮機制。
+-- summarized_at 是涵蓋到哪個時間點，下次只讀這之後的對話。
+CREATE TABLE IF NOT EXISTS group_profile (
+    chat_id       INTEGER PRIMARY KEY,
+    content       TEXT    NOT NULL,
+    summarized_at TEXT    NOT NULL
+);

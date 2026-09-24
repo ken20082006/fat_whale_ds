@@ -11,6 +11,7 @@ from ..core.access import AccessControl, MembershipCache
 from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.debounce import Debouncer
+from ..core.groupprofile import GroupProfiler
 from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
@@ -39,6 +40,7 @@ class Services:
     limiter: RateLimiter
     group_access: MembershipCache
     memory: MemoryExtractor
+    profiler: GroupProfiler
     stickers: StickerLibrary
 
     bot_username: str = ""

@@ -127,6 +127,53 @@ class SessionManager:
         )
         return sum(row["tokens"] or 0 for row in rows)
 
+    # ── 群組概況 ────────────────────────────────────────
+
+    async def group_exchanges_since(
+        self, chat_id: int, since: str | None, limit: int = 60
+    ) -> list[dict]:
+        """這個群組裡機器人**親自參與過**的交流，依時間正序。
+
+        只取屬於本群 session 的訊息 —— 那些正是「使用者指名找它」與「它的
+        回覆」。它在群組裡旁觀到的其他閒聊不會進來（那些只在 group_cache
+        留 72 小時，不該沉澱成永久概況）。
+
+        群組 session 一律是 group_thread 且帶 chat_id，所以不必碰 group_cache。
+        """
+        params: list = [chat_id]
+        condition = ""
+        if since:
+            condition = "AND m.created_at > ?"
+            params.append(since)
+        params.append(limit)
+
+        rows = await self._db.fetchall(
+            "SELECT m.role, m.content, m.created_at "
+            "FROM messages m JOIN sessions s ON s.id = m.session_id "
+            f"WHERE s.chat_id = ? AND s.kind = 'group_thread' {condition} "
+            "ORDER BY m.id DESC LIMIT ?",
+            tuple(params),
+        )
+        return [dict(row) for row in reversed(rows)]
+
+    async def get_group_profile(self, chat_id: int) -> dict | None:
+        row = await self._db.fetchone(
+            "SELECT content, summarized_at FROM group_profile WHERE chat_id = ?",
+            (chat_id,),
+        )
+        return dict(row) if row else None
+
+    async def set_group_profile(
+        self, chat_id: int, content: str, summarized_at: str
+    ) -> None:
+        await self._db.execute(
+            "INSERT INTO group_profile (chat_id, content, summarized_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET "
+            "content = excluded.content, summarized_at = excluded.summarized_at",
+            (chat_id, content, summarized_at),
+        )
+
     # ── 寫入 ────────────────────────────────────────────
 
     async def append(self, session_id: int, role: str, content: str, has_image: bool = False) -> None:
