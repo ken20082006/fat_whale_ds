@@ -57,6 +57,32 @@ def test_capability_block_always_denies_execution():
         assert "不能執行程式" in prompt
 
 
+def test_absence_of_notes_is_stated_explicitly():
+    """沒有筆記時要**明講**，不能只是留白。
+
+    真實事故：被問「記得我嗎」時答「記得，門西嘛，剛才才記下的」——
+    但發問的是另一個人，而全庫根本沒有門西的筆記。「門西」只是上一輪
+    在同一條串講過話的人。
+
+    留白的話模型分不清「真的沒有筆記」與「未載入」，而人設又寫著
+    「不要拒絕、不要裝無能、回覆要有內容」，於是它會從當下這串對話裡
+    抓一個現成的名字來充數。
+    """
+    prompt = Persona("角色").build(PersonaContext(notes=[]))
+
+    assert "沒有關於這位對話對象的筆記" in prompt
+    # 要明確准它照實講，否則人設的「不要裝無能」會壓過它
+    assert "不是裝無能" in prompt
+    # 也要提醒它別拿對話裡出現過的其他名字充數
+    assert "其他名字" in prompt
+
+
+def test_notes_replace_the_empty_notice():
+    prompt = Persona("角色").build(PersonaContext(notes=["他正在學 Rust"]))
+    assert "他正在學 Rust" in prompt
+    assert "沒有關於這位對話對象的筆記" not in prompt
+
+
 def test_search_marker_is_only_advertised_when_no_search_is_running():
     """只有在這一則還沒有搜尋時，才告訴模型它可以自己要求搜尋。
 
@@ -177,10 +203,20 @@ def test_others_notes_omitted_when_empty():
     assert "其他人的筆記" not in Persona("角色").build(PersonaContext(is_group=True))
 
 
-def test_empty_notes_and_summary_are_omitted():
+def test_empty_summary_is_omitted_but_empty_notes_are_stated():
+    """摘要留白就好，筆記要**明講**「沒有」。兩者刻意不對稱。
+
+    摘要沒有內容時沉默是安全的 —— 最近的原文本來就在對話裡，模型不會
+    因此誤判什麼。
+
+    筆記沉默則會被誤讀：模型分不清「真的沒有這個人的筆記」與「未載入」，
+    而人設又寫著「不要拒絕、不要裝無能、回覆要有內容」，於是它會從當下
+    這串對話裡抓一個現成的名字來充數。真實事故見
+    test_absence_of_notes_is_stated_explicitly。
+    """
     prompt = Persona("角色").build(PersonaContext())
-    assert "長期記憶" not in prompt
     assert "較早對話的摘要" not in prompt
+    assert "沒有關於這位對話對象的筆記" in prompt
 
 
 def test_falls_back_to_example_when_missing():
