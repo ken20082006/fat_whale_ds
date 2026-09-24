@@ -47,7 +47,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
 
-    text, images = await collect(
+    text, images, media_note = await collect(
         message, context.bot, svc.cfg, llm=svc.llm, db=svc.db
     )
     if text is None:
@@ -71,6 +71,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         chat_id=message.chat_id,
         session=session,
         images=images,
+        media_note=media_note,
     )
 
     try:

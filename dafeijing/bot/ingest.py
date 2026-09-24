@@ -23,8 +23,8 @@ async def collect(
     include_reply: bool = True,
     llm=None,
     db=None,
-) -> tuple[str | None, list[PreparedImage]]:
-    """回傳 (文字, 圖片列表)。不支援的訊息型態回傳 (None, [])。
+) -> tuple[str | None, list[PreparedImage], str | None]:
+    """回傳 (文字, 圖片列表, 媒體描述)。不支援的訊息型態回傳 (None, [], None)。
 
     include_reply 控制要不要一併處理被引用的那一則的媒體。
     群組路徑會傳 False —— 那裡由引用串快取負責，已經涵蓋整條串，
@@ -96,24 +96,28 @@ async def collect(
 
     # 標註只寫主要的這一則。被引用的那一則在引用串裡有自己的紀錄，
     # 而且它的媒體型態與這一則無關 —— 拿這一則去 describe 會寫出「〔檔案〕」。
-    hint = ""
+    # 媒體描述**不寫進訊息文字** —— 只回傳出去，由呼叫端放進當前這輪的
+    # system prompt。理由是它會擋住下一輪：
+    #
+    # 描述本來寫在訊息裡，而訊息會落庫。於是下一輪的歷史裡又多一句形狀
+    # 完全一樣的「〔系統給你的影片內容描述：…〕」，模型分不清哪一句屬於
+    # 眼前這條片 —— 實際表現是張冠李戴（用上一條片的內容答這一條），
+    # 再之後索性自己編（真實事故：描述寫住黑人小男孩，助理答「一隻貓蹲
+    # 喺鍵盤上面」）。
+    note = ""
     if own_note is not None:
-        # 明講這是「系統給你的內容描述」，不要只寫〔內容：…〕。
-        # 實測後者會被當成中繼資料略過 —— 助理照樣答「我淨係知有張動圖」，
-        # 而描述其實就在同一個 prompt 裡。
-        hint = (
-            f"{media.describe(message)}\n"
-            f"〔系統給你的影片內容描述：{own_note.text}〕"
-        )
+        note = own_note.text
     elif own_skip:
         # 刻意沒看就講出來 —— 否則對方會以為已經被看過了。
-        hint = f"{media.describe(message)}\n〔{own_skip}〕"
-    elif own_count:
+        note = own_skip
+
+    # 標註一定要出現 —— 模型才知道這一則有媒體。它**不會**寫進 note：
+    # 標註要落庫（下一輪還知道有過一條片），描述不要（見上面）。
+    if own_count or own_note is not None or own_skip:
         hint = media.describe(message)
-    if hint:
         text = f"{text}\n{hint}".strip() if text else hint
 
     if not text and not images:
-        return None, []  # 語音等尚未支援的型態
+        return None, [], None  # 語音等尚未支援的型態
 
-    return text, images
+    return text, images, note or None

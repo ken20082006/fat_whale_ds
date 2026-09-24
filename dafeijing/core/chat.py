@@ -165,6 +165,13 @@ class ChatRequest:
     people: list[Person] | None = None
     # 這則訊息 @ 到的人。他們在同一場合的筆記會被帶進提示，好回答「乙怎樣怎樣」。
     mentioned: list[Person] | None = None
+    # 這一則媒體的內容描述（影片／動圖外包回來的）。
+    #
+    # **刻意放在這裡而不是訊息文字裡。** 訊息會落庫，下一輪的歷史就會多
+    # 一句形狀完全一樣的描述，模型分不清哪一句屬於眼前這條片 —— 實際
+    # 表現是張冠李戴，再之後索性自己編（真實事故：描述寫住黑人小男孩，
+    # 助理答「一隻貓蹲喺鍵盤上面」）。放進 system prompt 就只有這輪見到。
+    media_note: str | None = None
 
 
 @dataclass
@@ -357,6 +364,23 @@ class ChatService:
         else:
             user_content = base_text
             stored_content = stored_base
+
+        # 這一則的媒體內容：附在**送出去的**訊息後面，但**不落庫**。
+        #
+        # 試過兩個位置，都唔得：
+        #   1. 寫進訊息文字 → 落庫 → 下一輪歷史又多一句形狀一樣的，模型
+        #      分不清哪句屬於眼前這條片（張冠李戴，再之後索性自己編）。
+        #   2. 放 system prompt → 離訊息太遠，模型會忽略，照樣答「睇唔到」。
+        #
+        # 附在訊息後面最靠近，而且歷史乾淨。抓回來的網頁本來就用這個做法。
+        if req.media_note:
+            user_content = (
+                f"{user_content}\n\n"
+                "[這一則的影片內容 —— 你看過了，就係以下咁多]\n"
+                f"{req.media_note}\n"
+                "[影片內容結束]"
+            )
+            stored_content = f"{stored_content}\n〔對方傳了一段影片〕"
 
         history = await self._sessions.window(req.session.id)
 
