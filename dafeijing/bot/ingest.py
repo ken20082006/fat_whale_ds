@@ -29,14 +29,15 @@ async def collect(
     群組路徑會傳 False —— 那裡由引用串快取負責，已經涵蓋整條串，
     在這裡重複抓會多下載一次同一張圖。
 
-    llm 有值時，動態素材會先外包給吃得了影片的模型拿一段解說
-    （見 media.describe_video）。外包失敗就照舊抽格。
+    llm 有值時，動態素材會外包給吃得了影片的模型拿一段解說
+    （見 media.describe_video）。**外包不成就當作沒有這個媒體** ——
+    見下方「睇唔到就直接唔睇」。
     """
     images: list[PreparedImage] = []
     # 主要這一則自己貢獻了幾張。標註要寫對格數，所以得和引用的那一則分開算。
     own_count = 0
     own_note: media.VideoNote | None = None
-    # 刻意沒外包的原因（太長／太大）。有值就要講給使用者聽。
+    # 沒外包成功的原因（太長／太大／拿不到），要講給使用者聽。
     own_skip = ""
 
     targets = [message]
@@ -62,21 +63,20 @@ async def collect(
                 return None, []
             continue
 
-        # 動態素材先試外包：它看得出連續動作、節奏與字幕變化，抽格做不到。
-        note = None
-        if media.is_motion(picked):
+        if media.is_motion(picked) and cfg.video_delegate_enabled:
+            # **睇唔到就直接唔睇。** 動態素材不再抽幾格充數 —— 一個定格看不出
+            # 連續動作，卻會讓模型以為自己看過，然後講出半真半假的描述。
+            # 外包成功就用解說，失敗就當作沒有這個媒體，並把原因講出來。
+            #
+            # 外包**關掉**時不走這條路，而是回到舊的抽格行為 —— 否則
+            # 「關掉外包」會變成「影片完全隱形」，那不是任何人想要的。
             note = await media.describe_video(bot, picked, cfg, llm)
-
-        if note is not None and note.text:
-            # 外包成功就**不再送圖** —— 解說已經涵蓋畫面內容，而且更省 token。
-            if target is message:
-                own_note = note
+            if note is not None and note.text:
+                if target is message:
+                    own_note = note
+            elif note is not None and note.skipped and target is message:
+                own_skip = note.skipped
             continue
-
-        # 沒外包成功就照舊抽格。「太長／太大」是刻意的決定（省錢），要記下來
-        # 講給使用者聽；呼叫失敗則不必提 —— 那是我們自己的問題。
-        if note is not None and note.skipped and target is message:
-            own_skip = note.skipped
 
         try:
             collected = await media.collect_media(bot, picked, cfg)
@@ -99,12 +99,11 @@ async def collect(
     if own_note is not None:
         # frames=None：外包那條路沒有「幾格畫面」這回事，寫格數會是錯的。
         hint = f"{media.describe(message, frames=None)}\n〔內容：{own_note.text}〕"
+    elif own_skip:
+        # 刻意沒看就講出來 —— 否則對方會以為已經被看過了。
+        hint = f"{media.describe(message, frames=None)}\n〔{own_skip}〕"
     elif own_count:
         hint = media.describe(message, frames=own_count)
-        if own_skip:
-            # 刻意沒外包就講出來 —— 否則對方會以為整段都被看過了，
-            # 而實際上只看得到幾格。
-            hint = f"{hint}\n〔{own_skip}〕"
     if hint:
         text = f"{text}\n{hint}".strip() if text else hint
 

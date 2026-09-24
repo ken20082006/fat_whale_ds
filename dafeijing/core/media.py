@@ -111,9 +111,18 @@ class VideoNote:
     skipped: str = ""
 
 
+# 這三種都是「一段影片」—— 值得外包去看，而且**不可以只抽幾格充數**。
+MOTION_SOURCES = ("video", "video_note", "animation")
+
+
 def is_motion(picked: "Picked") -> bool:
     """這個媒體是不是「一段影片」—— 值得外包去看。"""
-    return picked.source in ("video", "video_note", "animation")
+    return picked.source in MOTION_SOURCES
+
+
+def is_motion_source(source: str | None) -> bool:
+    """同上，但只憑來源字串判斷 —— 引用串只知道來源，沒有 Picked。"""
+    return source in MOTION_SOURCES
 
 
 def sniff_mime(blob: bytes) -> str:

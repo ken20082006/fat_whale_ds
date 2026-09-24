@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS group_cache (
     has_media     INTEGER NOT NULL DEFAULT 0,
     media_file_id TEXT,
     media_source  TEXT,
+    -- 影片與被轉成 MP4 的動圖：本體的 file_id 與長度。media_file_id 存的
+    -- 是**縮圖**，所以日後要重看那條片時只有縮圖可用；這幾欄是為了讓
+    -- 引用串那條路也拿得到本體、可以外包給看得了片的模型。
+    clip_file_id  TEXT,
+    clip_seconds  REAL,
+    clip_bytes    INTEGER,
     created_at    TEXT    NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );

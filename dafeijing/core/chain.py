@@ -39,12 +39,18 @@ class ReplyChain:
         media_file_id: str | None = None,
         media_source: str | None = None,
         username: str | None = None,
+        # 影片與被轉成 MP4 的動圖才有的「本體」。media_file_id 對它們來說是
+        # 縮圖，所以日後要重看那條片時得靠這幾個欄位。
+        clip_file_id: str | None = None,
+        clip_seconds: float | None = None,
+        clip_bytes: int | None = None,
     ) -> None:
         await self._db.execute(
             "INSERT OR REPLACE INTO group_cache "
             "(chat_id, message_id, reply_to_id, user_id, display_name, username, text, "
-            "has_media, media_file_id, media_source, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "has_media, media_file_id, media_source, clip_file_id, clip_seconds, "
+            "clip_bytes, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 message_id,
@@ -56,6 +62,9 @@ class ReplyChain:
                 1 if has_media else 0,
                 media_file_id,
                 media_source,
+                clip_file_id,
+                clip_seconds,
+                clip_bytes,
                 now_iso(),
             ),
         )
@@ -93,6 +102,9 @@ class ReplyChain:
             media_file_id=picked.file_id if picked else None,
             media_source=picked.source if picked else None,
             username=username,
+            clip_file_id=picked.clip_file_id if picked else None,
+            clip_seconds=picked.clip_seconds if picked else None,
+            clip_bytes=picked.clip_bytes if picked else None,
         )
 
     async def purge(self) -> int:
@@ -117,7 +129,7 @@ class ReplyChain:
 
             row = await self._db.fetchone(
                 "SELECT message_id, reply_to_id, user_id, display_name, text, has_media, "
-                "media_file_id, media_source "
+                "media_file_id, media_source, clip_file_id, clip_seconds, clip_bytes "
                 "FROM group_cache WHERE chat_id = ? AND message_id = ?",
                 (chat_id, current),
             )

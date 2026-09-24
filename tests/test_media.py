@@ -449,6 +449,21 @@ def test_is_motion_covers_the_three_dynamic_sources():
         assert not media.is_motion(Picked("f", source)), source
 
 
+def test_is_motion_source_agrees_with_is_motion():
+    """引用串只有來源字串，沒有 Picked —— 兩個判斷必須一致。
+
+    不一致的話，引用串裡的影片會被抽格那條路收走，而抽一格看不出連續動作。
+    """
+    for source in ("video", "video_note", "animation"):
+        assert media.is_motion_source(source), source
+        assert media.is_motion(Picked("f", source)), source
+
+    for source in ("photo", "sticker"):
+        assert not media.is_motion_source(source), source
+
+    assert not media.is_motion_source(None)
+
+
 def test_sniff_mime_tells_gif_from_mp4():
     """data URL 的 mime 不能猜錯，模型會照它解碼。
 

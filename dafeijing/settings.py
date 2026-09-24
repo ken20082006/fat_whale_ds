@@ -218,6 +218,10 @@ class Settings(BaseSettings):
     video_delegate_max_tokens: int = 400
     video_delegate_max_chars: int = 300
 
+    # 一輪最多外包幾條「引用串裡的」影片。每條最貴約兩仙美元，所以預設
+    # 只做最近一條 —— 一串裡有四條片就是 $0.09，不該默默發生。
+    video_delegate_chain_limit: int = 1
+
     @property
     def admin_ids(self) -> set[int]:
         out: set[int] = set()
