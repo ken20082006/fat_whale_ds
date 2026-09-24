@@ -74,7 +74,7 @@ DeepSeek 的擬人化 Telegram Bot。私人邀請制，只有拿到邀請碼的�
 
 - 完整記錄每人每次的 token 與費用，推理與快取分開計
 - 預設只記錄不封鎖，跑一段時間後再決定配額
-- 深度思考預設關閉，見下節
+- 深度思考逐則判斷：難題才想，閒聊不想，見下節
 
 ---
 
@@ -91,8 +91,53 @@ OpenRouter 的 `reasoning` 參數只有 `{"enabled": false}` 有效。
 `effort: "low"`、`effort: "minimal"`、`max_tokens: 0` 實測都無法降低推理量
 （`minimal` 甚至讓推理變多），所以本專案只用 enabled 開關。
 
-因此：**深度思考預設關閉**（`FW_REASONING_ENABLED`），使用者可用 `/think on` 個別開啟。
+因此：**深度思考預設逐則判斷** —— 由 Jev 決策模型決定這一則要不要想（見下節），
+使用者可用 `/think on` / `/think off` 強制，`/think auto` 交回系統判斷。
+`FW_REASONING_ENABLED` 現在只是**降級後備**：決策模型不可用時才用它。
+
 對話管線與摘要都明確關閉推理；摘要是一次性的內部工作，不需要思考。
+
+### 用 Jev 逐則判斷
+
+有幾件事交給主模型自己決定都會失敗，因為它同時想回答、又得先決定要不要做
+別的事 —— 有利益衝突，最後幾乎必然選擇直接回答。這正是早期的
+`[[搜尋:...]]` 標記機制失敗的原因：模型必須產出一個「不回答」的回合，
+而提示最後又給了它直接答的出口。
+
+所以改成問 **Jev**（`typesafe/jev-1.13`，TypeSafe 的決策模型）。它**不是聊天
+模型** —— 不生成文字，只回傳校准過的機率與選項。走獨立端點
+（`/api/alpha/decisions`，所以**不在 `/models` 清單裡**，也不能用
+`/chat/completions` 打），**輸出免費**，實測約 $0.00002/次。
+
+**一次呼叫問齊三題**（`questions` 收一個 dict；分開打只是白付兩次網絡往返）：
+
+| 問題 | primitive | 拿來做什麼 |
+|---|---|---|
+| 這一則怎麼處理 | `choice` | 決定要唔要搜尋、要唔要推理 |
+| 要思考到幾深 | `score` | 調 `max_tokens` 額度（推理會吃掉額度） |
+| 演出要放開到幾成 | `score` | 逐則調節人設濃度 |
+
+`score` 回的是**連續值**（機率加權後的位置），不是分桶。兩種都附
+`confidence` —— 分布很平時它會老實說不肯定（實測見過 0.23），低於
+`FW_DECISION_MIN_CONFIDENCE` 就當作沒判斷、退回後備。
+
+**優先順序**：個人 `/think on|off` 指定 → Jev 判斷 → `FW_REASONING_ENABLED` 後備。
+`/vibe` 則是**上限** —— Jev 只可以把演出收窄，不可以推高。
+
+**搜尋不變的部分**：`off` 完全不搜，`always` 與 `/search` 不受判斷影響，
+只有 `auto` 交給 Jev。原本的 regex 降級成**後備**（判斷失手時仍然捉得到
+明講的「上網查」），但不可以否決判斷。
+
+**記憶抽取也先問它**：Jev 說這段對話沒有值得記的事實，就跳過那次抽取呼叫。
+門檻設得低（`FW_MEMORY_DECISION_THRESHOLD`，預設 0.25），因為漏記一則
+正確的事實比多花一次便宜呼叫嚴重得多。
+
+Jev 是 alpha 端點，掛掉是預期內的事，所以用戶端**永不拋例外** ——
+失敗就靜靜退回各自的全域設定，不會讓回覆失敗。
+
+> **實作細節**：`score` 的 `criteria` 必須是**陣列**，`choice` 的是 **record**；
+> 每個問題一定要有 `instructions` 欄位。這些文件沒寫清楚，是實測出來的 ——
+> 用 `scripts/ping.py --search` 可以重新驗證。
 
 ---
 
@@ -157,7 +202,7 @@ cp config/persona.example.md config/persona.md
 | `/context` | 看看目前記得多少 |
 | `/export` | 匯出對話為 Markdown |
 | `/vibe low\|mid\|high` | 調整人設濃度 |
-| `/think on\|off\|auto` | 深度思考開關 |
+| `/think on\|off\|auto` | 深度思考：on／off 強制，auto 逐則判斷 |
 | `/remember <內容>` | 寫入這個場合的長期記憶 |
 | `/forget` | 清掉這個場合的筆記 |
 | `/forget all` | 清掉所有場合的筆記 |
@@ -210,6 +255,8 @@ cp config/persona.example.md config/persona.md
 幾個刻意的設計：
 
 - 抽取走便宜的 utility 模型、關閉推理
+- **先問 Jev 值不值得記**（`FW_MEMORY_DECISION_THRESHOLD`）—— 判斷說沒有的話
+  就跳過整次抽取呼叫。這個閘在背景跑，省的是呼叫不是延遲
 - 訊息少於 12 字、或只有媒體標註（`〔貼圖，emoji：😭〕`）時直接跳過，不浪費呼叫
 - 已有的事實不會重複寫入
 - 每場合上限 60 則（`FW_NOTES_PER_SCOPE_MAX`），超過丟最舊的，避免 system prompt 被撐大
