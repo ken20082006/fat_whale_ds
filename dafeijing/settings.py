@@ -35,7 +35,31 @@ class Settings(BaseSettings):
     # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。
     # 實測關掉後單次費用約降為四分之一，對一般閒聊毫無損失。
     # 使用者可用 /think 個別開啟。
+    #
+    # 這個值是**降級用的後備**：使用者沒指定 /think 時由決策模型逐則判斷，
+    # 決策模型不可用時才退回這裡。見 llm/decisions.py。
     reasoning_enabled: bool = False
+
+    # ── 決策模型（Jev）──
+    # TypeSafe 的 Jev，走獨立端點，不是聊天模型。用來在呼叫主模型前判斷
+    # 這一則需不需要深度思考。$0.042/M 輸入、輸出免費，大約 $0.00002/次。
+    decision_enabled: bool = True
+    decision_model: str = "typesafe/jev-1.13"
+    decision_endpoint: str = "https://openrouter.ai/api/alpha/decisions"
+    # 它擋在主回覆前面，逾時要短 —— 等太久不如直接降級。
+    decision_timeout_seconds: float = 8.0
+    # 判斷附帶的信心值（0–1）。低於這個值就當作「沒判斷」，退回後備 ——
+    # 分布很平的時候（實測見過 0.23）不該硬選一個。
+    decision_min_confidence: float = 0.35
+    # 判斷說要思考時，max_tokens 放寬幾倍。推理 token 會**吃掉**這個額度，
+    # 用完 content 會變 null（使用者收到「本鯨想得太久，額度用完了」）。
+    # 思考越深就多留一點；不說要思考時完全不動。
+    reasoning_budget_low: float = 1.2
+    reasoning_budget_high: float = 1.8
+    # 記憶抽取的前置閘：Jev 說「這段對話沒有值得記的事實」時，跳過那次抽取
+    # 呼叫。門檻刻意設得低 —— 漏記一則正確的事實，比多花一次便宜呼叫嚴重
+    # 得多，所以這個閘只可以在有把握時才收窄。
+    memory_decision_threshold: float = 0.25
 
     # ── 聯網 ──
     # 搜尋積極程度：
