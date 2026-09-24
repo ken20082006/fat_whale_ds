@@ -106,9 +106,17 @@ class Settings(BaseSettings):
     history_retention_days: int = 30
     group_cache_retention_hours: int = 72
 
-    # ── 圖片 ──
+    # ── 媒體 ──
     image_max_edge: int = 1024
+    # 單一媒體的下載上限，量的是實際下載的位元組數，不是原始素材的大小 ——
+    # 靜態圖片與貼圖縮圖都遠低於這個值。真正受限的是 GIF 本體與要抽格的影片。
     image_max_bytes: int = 8 * 1024 * 1024
+    # 一次送幾格。三格足以看出「這條片在做什麼」，再多只是重複同樣的畫面。
+    # 每一格約 170 token，三格約 510。
+    media_frames: int = 3
+    # 超過這個長度就只取第一格 —— 完整解碼一段長片會讓回覆延遲到無法接受。
+    # 讀少一格，總比讓使用者等半分鐘好。
+    media_max_seconds: float = 180.0
 
     @property
     def admin_ids(self) -> set[int]:

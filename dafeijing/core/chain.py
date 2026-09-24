@@ -90,8 +90,8 @@ class ReplyChain:
             display_name=display_name,
             text=text,
             has_media=has_media,
-            media_file_id=picked[0] if picked else None,
-            media_source=picked[1] if picked else None,
+            media_file_id=picked.file_id if picked else None,
+            media_source=picked.source if picked else None,
             username=username,
         )
 

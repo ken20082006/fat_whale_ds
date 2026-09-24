@@ -20,7 +20,7 @@ from telegram.ext import ContextTypes
 from ..core.chain import normalise_name
 from ..core.chat import ChatRequest
 from ..core.debounce import MAX_IMAGES
-from ..core.media import MediaError, PreparedImage, prepare_from_telegram
+from ..core.media import MediaError, Picked, PreparedImage, collect_media
 from ..core.memory import Person
 from ..llm.openrouter import LLMError
 from .commands import get_services
@@ -379,10 +379,10 @@ async def _gather_chain_media(
     images: list[PreparedImage] = []
     for file_id, source in reversed(candidates):
         try:
-            images.append(
-                await prepare_from_telegram(
-                    bot, file_id, max_edge=cfg.image_max_edge, source=source
-                )
+            # 快取只存 file_id 與來源，沒有影片的長度與大小，所以影片在這裡
+            # 一律只有一張縮圖。真 GIF 因為不需要那些資訊，仍然可以逐格抽。
+            images.extend(
+                await collect_media(bot, Picked(file_id, source, None), cfg)
             )
         except MediaError:
             # 舊檔可能已失效，略過就好，不該讓整則訊息失敗
