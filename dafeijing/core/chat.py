@@ -43,9 +43,6 @@ class ChatRequest:
     is_group: bool = False
     chain_text: str | None = None
     chain_messages: list[dict] | None = None
-    # 群組限定：這個群組近期的其他發言（已排成文字）。與引用串不同，
-    # 這些只是背景 —— 讓「甲也貼過」這類問題答得出來。
-    recent_context: str | None = None
     images: list[PreparedImage] = field(default_factory=list)
     force_search: bool = False
     # 群組限定：這一串裡出現過的人。抽取時用來把事實歸給正確的人。
@@ -119,7 +116,6 @@ class ChatService:
                 notes=notes,
                 summary=req.session.summary,
                 is_group=req.is_group,
-                recent_context=req.recent_context,
                 sticker_menu=self._stickers.menu() if self._stickers.available else None,
                 today=today_text(
                     self._cfg.timezone_offset_hours, self._cfg.timezone_label

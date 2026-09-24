@@ -219,30 +219,15 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
     root_id = chain[0]["message_id"] if chain else message.message_id
     chain_text = svc.chain.format_for_prompt(chain, svc.bot_name)
 
-    # 引用鏈只追得到互相引用的那一串。同一桌其他人的近況另外取，否則
-    # 甲貼了張咖啡相、乙跟著也貼一張問評價時，助理答不出「甲也貼過」。
-    # 已在引用串裡的不重複取，助理自己的發言也不取（那些已在滾動歷史裡）。
-    recent = await svc.chain.recent(
-        message.chat_id,
-        limit=svc.cfg.group_recent_messages,
-        exclude_ids={item["message_id"] for item in chain},
-        bot_id=svc.bot_id,
-    )
-    recent_text = svc.chain.format_recent(recent)
-
     # 引用串解出來才知道有哪些人發言，所以放在這裡
     people, mentioned = await _collect_people(message, chain, svc)
 
-    # 出現過的媒體要真的抓下來。只給「〔圖片〕」這種文字標註的話，
-    # 對方引用的圖等於沒被看到。引用串與近期發言一起收，再依時序取最近的。
-    images = await _gather_media(
-        chain + recent,
-        context.bot,
-        svc.cfg,
-        skip={message.message_id},
-        limit=MAX_IMAGES,
+    # 串裡出現過的圖片也要真的抓下來。只給「〔圖片〕」這種文字標註的話，
+    # 對方引用的圖等於沒被看到。
+    chain_images = await _gather_chain_media(
+        chain, context.bot, svc.cfg, skip={message.message_id}, limit=MAX_IMAGES
     )
-    images.extend(own_images)
+    images = chain_images + own_images
     if len(images) > MAX_IMAGES:
         images = images[-MAX_IMAGES:]  # 保留最靠近提問的幾張
 
@@ -258,7 +243,6 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         is_group=True,
         chain_text=chain_text or None,
         chain_messages=chain,
-        recent_context=recent_text or None,
         images=images,
         people=people,
         mentioned=mentioned,
@@ -370,42 +354,30 @@ def _mentioned_names(message, bot_username: str) -> list[str]:
     return names
 
 
-async def _gather_media(
-    messages: list[dict],
+async def _gather_chain_media(
+    chain: list[dict],
     bot,
     cfg,
     *,
     skip: set[int],
     limit: int,
 ) -> list[PreparedImage]:
-    """把這批訊息裡出現過的媒體抓下來，依時序由舊到新回傳。
+    """把引用串裡出現過的圖片抓下來，由舊到新回傳。
 
-    引用串與近期發言會混在一起送進來，所以先按 message_id 排好再取最後
-    `limit` 則 —— 「最靠近提問的」才是該留下的。一則可能展開成多格
-    （GIF、影片），所以回傳的張數不一定等於 limit，由呼叫端最後統一裁剪。
+    先從最新往回取 —— 越靠近提問的越相關，超過上限時先丟掉最舊的。
     """
-    candidates: list[tuple[int, str, str]] = []
-    for item in messages:
-        message_id = item.get("message_id")
-        if message_id is None or message_id in skip:
-            continue
-        file_id = item.get("media_file_id")
-        if not file_id:
-            continue
-        candidates.append((message_id, file_id, item.get("media_source") or "photo"))
+    candidates: list[tuple[str, str]] = []
 
-    # 引用串與近期發言理應不重疊（呼叫端已排除），但排序後去重一次，
-    # 免得同一則被下載兩次。
-    seen: set[int] = set()
-    unique: list[tuple[int, str, str]] = []
-    for candidate in sorted(candidates, key=lambda c: c[0]):
-        if candidate[0] in seen:
+    for item in reversed(chain):
+        if len(candidates) >= limit:
+            break
+        file_id = item.get("media_file_id")
+        if not file_id or item.get("message_id") in skip:
             continue
-        seen.add(candidate[0])
-        unique.append(candidate)
+        candidates.append((file_id, item.get("media_source") or "photo"))
 
     images: list[PreparedImage] = []
-    for _message_id, file_id, source in unique[-limit:]:
+    for file_id, source in reversed(candidates):
         try:
             # 快取只存 file_id 與來源，沒有影片的長度與大小，所以影片在這裡
             # 一律只有一張縮圖。真 GIF 因為不需要那些資訊，仍然可以逐格抽。
@@ -414,7 +386,7 @@ async def _gather_media(
             )
         except MediaError:
             # 舊檔可能已失效，略過就好，不該讓整則訊息失敗
-            logger.warning("快取裡的媒體抓不到，略過：%s", file_id)
+            logger.warning("引用串裡的圖片抓不到，略過：%s", file_id)
 
     return images
 
