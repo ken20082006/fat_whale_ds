@@ -47,11 +47,39 @@ class ReplyChain:
         unique_id: str | None = None,
     ) -> None:
         await self._db.execute(
-            "INSERT OR REPLACE INTO group_cache "
+            "INSERT INTO group_cache "
             "(chat_id, message_id, reply_to_id, user_id, display_name, username, text, "
             "has_media, media_file_id, media_source, clip_file_id, clip_seconds, "
             "clip_bytes, unique_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            # `reply_to_id` 用 COALESCE，**不是**覆蓋。
+            #
+            # 同一個 message_id 會被寫兩次：發送時由我們自己寫（知道它回覆
+            # 哪一則），之後別人回覆它時再由 cache_from_update() 寫一次。
+            # 但 Telegram 的更新只帶**一層** reply_to_message —— 那個巢狀物件
+            # 自己的 reply_to_message 是 None。所以第二次寫會把正確的值
+            # 蓋成 None。
+            #
+            # 後果很大：助理自己的回覆全部變成「唔係回覆」，引用鏈每次都
+            # 在助理那一則斷掉，root 變成助理自己 —— 於是**每一輪都自成一條
+            # 串、自成一個 session**，群組完全沒有連續性（實測同一段對話
+            # 產生 115 個 session）。使用者連問六次，助理每次都是初次見面。
+            #
+            # COALESCE 的意思：新值是 None 就保留舊值。訊息真的是「唔係回覆」
+            # 時，舊值本來就是 None，不會有殘留。
+            "ON CONFLICT(chat_id, message_id) DO UPDATE SET "
+            "reply_to_id = COALESCE(excluded.reply_to_id, group_cache.reply_to_id), "
+            "user_id = excluded.user_id, "
+            "display_name = excluded.display_name, "
+            "username = excluded.username, "
+            "text = excluded.text, "
+            "has_media = excluded.has_media, "
+            "media_file_id = excluded.media_file_id, "
+            "media_source = excluded.media_source, "
+            "clip_file_id = excluded.clip_file_id, "
+            "clip_seconds = excluded.clip_seconds, "
+            "clip_bytes = excluded.clip_bytes, "
+            "unique_id = excluded.unique_id",
             (
                 chat_id,
                 message_id,

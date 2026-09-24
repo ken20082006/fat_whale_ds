@@ -68,7 +68,9 @@ class Settings(BaseSettings):
     # 「要搜尋」。實測 0 則 direct、2 則以上 search。
     #
     # 但 2 則並不總是夠（真實事故裡 2 則仍然誤判），所以這裡留一點餘裕。
-    decision_context_messages: int = 4
+    # 15 則 = 大約七個來回。判斷要睇得出「對方已經問過、我查過、佢仍然
+    # 追問」這個模式，太少則數看不出來，太多則每則訊息都多付一次輸入。
+    decision_context_messages: int = 15
     # 判斷說要思考時，max_tokens 放寬幾倍。推理 token 會**吃掉**這個額度，
     # 用完 content 會變 null（使用者收到「本鯨想得太久，額度用完了」）。
     # 思考越深就多留一點；不說要思考時完全不動。

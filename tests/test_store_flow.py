@@ -450,6 +450,48 @@ def test_cache_from_update_without_media_stores_no_file_id():
     asyncio.run(scenario())
 
 
+def test_recaching_keeps_reply_to_id_when_the_new_value_is_none():
+    """回覆助理的訊息時會再寫一次快取 —— 那一次不可以把 reply_to_id 蓋成 None。
+
+    Telegram 的更新只帶**一層** reply_to_message，那個巢狀物件自己的
+    reply_to_message 是 None。舊寫法用 INSERT OR REPLACE，於是助理的
+    回覆全部變成「唔係回覆」，引用鏈每次在助理那一則斷掉，每一輪自成
+    一條串、自成一個 session —— 群組等於完全沒有連續性。
+    """
+    cfg = FakeCfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = await _new_db(Path(tmp))
+            chain = ReplyChain(db, cfg)
+
+            # 助理回覆使用者那一則 —— 我們自己知道它回覆誰
+            await chain.cache_message(-100, 10, None, 7, "甲", "第一句", False)
+            await chain.cache_message(-100, 11, 10, 999, "大肥鯨", "回覆", False)
+
+            row = await db.fetchone(
+                "SELECT reply_to_id FROM group_cache WHERE chat_id=-100 AND message_id=11"
+            )
+            assert row["reply_to_id"] == 10
+
+            # 之後使用者回覆助理，觸發 cache_from_update 再寫一次；
+            # 那個巢狀物件的 reply_to_message 是 None
+            await chain.cache_message(-100, 11, None, 999, "大肥鯨", "回覆", False)
+
+            row = await db.fetchone(
+                "SELECT reply_to_id FROM group_cache WHERE chat_id=-100 AND message_id=11"
+            )
+            assert row["reply_to_id"] == 10, "reply_to_id 不該被 None 蓋掉"
+
+            # 引用鏈因此接得起來
+            resolved = await chain.resolve(-100, 11)
+            assert [item["message_id"] for item in resolved] == [10, 11]
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_scope_for_gives_each_group_its_own_namespace():
     from dafeijing.core.session import scope_for
 
