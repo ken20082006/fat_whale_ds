@@ -131,6 +131,11 @@ def _reply_with_sources(result) -> str:
     return f"{result.text}\n〔查了：{'、'.join(hosts)}〕"
 
 
+# 助理搜過網時，落庫的回覆會帶這一行（見 _reply_with_sources）。
+# 判斷用它認出「上一輪已經查過」。
+_SEARCHED_MARK = "〔查了："
+
+
 def build_state(text: str, recent: list[dict], limit: int = 300) -> str:
     """組成判斷要看的內容。
 
@@ -138,15 +143,32 @@ def build_state(text: str, recent: list[dict], limit: int = 300) -> str:
     一個三個字的片段，判斷成「直接答」；帶上「上一句問緊開賣日期」之後
     才會判斷成「要搜尋」。實測：單獨 direct（信心 0.81）、帶上文 search。
     沒有上文的話，使用者追問一次就等於白問。
+
+    **而且要看對方是不是在追問。** 判斷本來是逐則獨立的，所以「對方已經
+    問過、你查過、佢仍然追問」這件事它看不出來 —— 實際事故：使用者連續
+    六則強調同一件事，助理四次都判斷成唔使搜，甚至答「我冇開聯網搜尋」。
+    上一輪查過而對方仍然追問，通常代表查得不夠，要再查或者想清楚一點。
     """
     if not recent:
         return text
+
     lines = [
         f"{'使用者' if item.get("role") == "user" else "助理"}："
         f"{truncate(item.get("content") or "", limit)}"
         for item in recent
     ]
-    return "上一輪對話：\n" + "\n".join(lines) + f"\n\n使用者現在說：{text}"
+    state = "上一輪對話：\n" + "\n".join(lines) + f"\n\n使用者現在說：{text}"
+
+    if any(
+        item.get("role") == "assistant" and _SEARCHED_MARK in (item.get("content") or "")
+        for item in recent
+    ):
+        state += (
+            "\n\n（注意：你上一輪已經上網查過，對方仍然追問 —— 通常代表查得"
+            "不夠或者答得不好。這次應該再加強：再查一次（換個講法），"
+            "或者想清楚一點才答。）"
+        )
+    return state
 
 
 @dataclass

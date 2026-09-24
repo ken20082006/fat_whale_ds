@@ -39,6 +39,30 @@ def test_state_truncates_long_old_turns():
     assert "ok" in state
 
 
+def test_state_flags_that_a_search_already_happened():
+    """對方仍然追問時，要講明「上一輪已經查過」。
+
+    判斷本來是逐則獨立的，所以「對方已經問過、你查過、佢仍然追問」這件事
+    它看不出來。實際事故：使用者連續六則強調同一件事，助理四次都判斷成
+    唔使搜，甚至答「我而家冇開聯網搜尋」。
+    """
+    recent = [
+        {"role": "user", "content": "哀鴻點解畀人話食黑流量"},
+        {"role": "assistant", "content": "查了一下……\n〔查了：example.com〕"},
+    ]
+    state = build_state("你自己去搵啦", recent)
+    assert "上一輪已經上網查過" in state
+
+
+def test_state_has_no_search_hint_when_nothing_was_searched():
+    """沒查過就不要亂標 —— 否則每一則追問都會被推去搜。"""
+    recent = [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "你好呀，有咩想問？"},
+    ]
+    assert "上一輪已經上網查過" not in build_state("今日點", recent)
+
+
 def test_state_handles_missing_content():
     """歷史訊息可能沒有 content（例如只有圖）。不該爆。"""
     state = build_state("睇下呢張圖", [{"role": "assistant", "content": None}])
