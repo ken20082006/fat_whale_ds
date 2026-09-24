@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from ..llm.decisions import (
+    EFFORT_THOROUGH,
     Assessment,
     DecisionsClient,
     budget_factor,
@@ -49,6 +50,53 @@ VIBE_ORDER = ("low", "mid", "high")
 def _fmt_score(value: float | None) -> str:
     """日誌用。沒判斷到就寫 —，不要寫 None。"""
     return "—" if value is None else f"{value:.2f}"
+
+
+def pick_search(
+    *,
+    mode: str,
+    force: bool,
+    text: str,
+    route: str | None,
+    effort: str | None,
+) -> str:
+    """這一則要怎麼搜。回傳 "off" / "tool" / "force"。
+
+    - `off`   完全不搜
+    - `tool`  帶伺服器端工具，由模型自己決定搜幾次、搜什麼
+    - `force` 走外掛強制搜一次 —— 伺服器端工具沒有 tool_choice、官方也沒
+              記載可強制，所以需要「保證會搜」的場合只能走外掛。
+
+    抽成純函式是因為這段已經出錯兩次，值得有測試釘住。
+    """
+    # /search 是明確要求，即使模式是 off 也應該生效。舊版寫成
+    # `force and mode != "off"`，於是 off 之下 /search 會靜默不查，
+    # 使用者無從得知。
+    if force:
+        return "force"
+    if mode == "off":
+        return "off"
+    if mode == "always":
+        return "force"
+    if mode == "trigger":
+        # 這個模式刻意只認明講的，所以不看判斷結果。
+        return "tool" if wants_search(text, mode) else "off"
+
+    # auto。**判斷說「小眾冷門、撈少會漏」，本身就意味著應該去搜。**
+    #
+    # route 與 effort 是分開問的，會出現自相矛盾的組合。實際案例：問
+    # 「iphone 18幾時出」之後追問「duo呢」，route 說 direct、effort 卻說
+    # thorough（它認得那個詞冷門）—— 結果不搜，助理就一路否認那個型號
+    # 存在，而實際上搜一次就找到，連 apple.com 的新聞稿都有。
+    if effort == EFFORT_THOROUGH:
+        return "tool"
+
+    # regex 只做**後備**、不做否決 —— 判斷失手時仍然捉得到明講的「上網查」。
+    # 反過來讓 regex 能否決判斷，就會退化回舊行為。
+    _reason, by_route = route_flags(route)
+    if by_route or wants_search(text, mode):
+        return "tool"
+    return "off"
 
 
 def _source_hosts(sources: list[str], limit: int = 3) -> list[str]:
@@ -165,7 +213,9 @@ class ChatService:
         """
         if not text.strip():
             return None
-        recent = await self._sessions.recent_messages(session_id, 2)
+        recent = await self._sessions.recent_messages(
+            session_id, self._cfg.decision_context_messages
+        )
         return await self._decisions.assess(build_state(text, recent))
 
     def _pick_reasoning(self, user, route: str | None) -> bool:
@@ -176,35 +226,16 @@ class ChatService:
             personal, indicated, fallback=self._cfg.reasoning_enabled
         )
 
-    def _pick_search(self, req: ChatRequest, route: str | None) -> str:
-        """這一則要怎麼搜。回傳 "off" / "tool" / "force"。
-
-        - `off`   完全不搜
-        - `tool`  帶伺服器端工具，由模型自己決定搜幾次、搜什麼
-        - `force` 走外掛強制搜一次 —— 伺服器端工具沒有 tool_choice、官方也
-                  沒記載可強制，所以「保證會搜」的場合只能走外掛。
-        """
-        mode = self._cfg.search_mode
-
-        # /search 是明確要求，即使模式是 off 也應該生效。舊版寫成
-        # `req.force_search and mode != "off"`，於是 off 之下 /search 會靜默
-        # 不查，使用者無從得知。
-        if req.force_search:
-            return "force"
-        if mode == "off":
-            return "off"
-        if mode == "always":
-            return "force"
-        if mode == "trigger":
-            # 這個模式刻意只認明講的，所以不看判斷結果。
-            return "tool" if wants_search(req.text or "", mode) else "off"
-
-        # auto：交給判斷。regex 只做**後備**、不做否決 —— 判斷失手時仍然
-        # 捉得到明講的「上網查」。反過來讓 regex 能否決判斷就會退化回舊行為。
-        _reason, by_route = route_flags(route)
-        if by_route or wants_search(req.text or "", mode):
-            return "tool"
-        return "off"
+    def _pick_search(
+        self, req: ChatRequest, route: str | None, effort: str | None
+    ) -> str:
+        return pick_search(
+            mode=self._cfg.search_mode,
+            force=req.force_search,
+            text=req.text or "",
+            route=route,
+            effort=effort,
+        )
 
     async def respond(self, req: ChatRequest) -> ChatOutcome:
         user = await self._access.get_user(req.tg_user_id)
@@ -223,7 +254,9 @@ class ChatService:
         route = assessment.route if assessment else None
 
         reasoning = self._pick_reasoning(user, route)
-        search_mode = self._pick_search(req, route)
+        search_mode = self._pick_search(
+            req, route, assessment.search_effort if assessment else None
+        )
         searching = search_mode != "off"
 
         # 要撈幾多條由判斷決定。外掛每次請求只搜一次、查詢由引擎自己從
