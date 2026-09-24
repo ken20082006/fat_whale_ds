@@ -7,6 +7,7 @@ import logging
 import time
 
 from telegram import Update
+from telegram.constants import ChatType
 from telegram.ext import (
     Application,
     ChatMemberHandler,
@@ -258,8 +259,23 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.error("未處理的例外", exc_info=context.error)
 
-    if isinstance(update, Update) and update.effective_message is not None:
-        try:
-            await update.effective_message.reply_text("本鯨栽了一下，已經記在日誌裡了。")
-        except Exception:
-            pass
+    if not isinstance(update, Update):
+        return
+    message = update.effective_message
+    if message is None or message.chat is None:
+        return
+
+    # **群組裡沒被指名就不要回覆。**
+    #
+    # 快取處理器（group=-1）會經手群組裡每一則訊息，所以任何一則都可能
+    # 觸發例外。在那裡回覆，等於 bot 沒有被叫就自己講話 —— 使用者見到
+    # 嘅係「我冇 @ 佢，佢自己跳出嚟」。真實事故：影片貼圖令 pick_file()
+    # 拋 AttributeError，於是群組裡每個貼圖都換來一句「本鯨栽了一下」。
+    if message.chat.type != ChatType.PRIVATE:
+        if svc is None or not group.is_addressed_to_bot(message, svc):
+            return
+
+    try:
+        await message.reply_text("本鯨栽了一下，已經記在日誌裡了。")
+    except Exception:
+        pass

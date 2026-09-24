@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS group_cache (
     clip_file_id  TEXT,
     clip_seconds  REAL,
     clip_bytes    INTEGER,
+    -- Telegram 的穩定識別碼。media_notes 的快取鍵靠它 —— 沒有這欄，
+    -- 引用串那條路就認不出「同一條片」，會每次重新外包而且描述唔一致。
+    unique_id     TEXT,
     created_at    TEXT    NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );

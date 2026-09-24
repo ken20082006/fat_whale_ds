@@ -30,6 +30,7 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("group_cache", "clip_file_id", "TEXT"),
     ("group_cache", "clip_seconds", "REAL"),
     ("group_cache", "clip_bytes", "INTEGER"),
+    ("group_cache", "unique_id", "TEXT"),
     ("stickers", "file_id", "TEXT"),
     ("stickers", "featured", "INTEGER NOT NULL DEFAULT 0"),
     ("group_cache", "username", "TEXT"),

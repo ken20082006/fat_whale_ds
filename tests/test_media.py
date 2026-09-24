@@ -54,7 +54,10 @@ def _sticker(*, animated=False, video=False, emoji="😭", thumbnail="thumb-id")
         file_id="sticker-id",
         file_unique_id="sticker-uid",
         file_size=5000,
-        duration=3.0,
+        # **刻意沒有 duration** —— 真實的 telegram.Sticker 沒有這個屬性。
+        # 之前這裡為了迎合程式碼而加過，結果掩蓋了一個真 bug：影片貼圖
+        # 會在 _clip() 裡 AttributeError，然後全局錯誤處理器就在群組回覆，
+        # bot 冇被叫都自己出現。假物件比現實寬鬆，比缺屬性更危險。
         thumbnail=_thumb(thumbnail) if thumbnail else None,
     )
 

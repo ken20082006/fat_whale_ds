@@ -423,7 +423,12 @@ def _clip(media, source: str) -> Picked | None:
         declared_bytes=media.thumbnail.file_size,
         clip_file_id=media.file_id,
         clip_bytes=media.file_size,
-        clip_seconds=media.duration,
+        # **getattr 而不是直接取。** 這個函式收的是 Video、VideoNote、
+        # Animation 與 Sticker 四種；前三種有 duration，**Sticker 沒有**。
+        # 直接寫 media.duration 會在影片貼圖上 AttributeError，而
+        # cache_group_message 經手群組每一則訊息 —— 一拋錯，全局錯誤
+        # 處理器就會在群組回覆，bot 冇被叫都自己出現。
+        clip_seconds=getattr(media, "duration", None),
         unique_id=media.file_unique_id,
     )
 

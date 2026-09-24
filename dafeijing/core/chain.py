@@ -44,13 +44,14 @@ class ReplyChain:
         clip_file_id: str | None = None,
         clip_seconds: float | None = None,
         clip_bytes: int | None = None,
+        unique_id: str | None = None,
     ) -> None:
         await self._db.execute(
             "INSERT OR REPLACE INTO group_cache "
             "(chat_id, message_id, reply_to_id, user_id, display_name, username, text, "
             "has_media, media_file_id, media_source, clip_file_id, clip_seconds, "
-            "clip_bytes, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "clip_bytes, unique_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 message_id,
@@ -65,6 +66,7 @@ class ReplyChain:
                 clip_file_id,
                 clip_seconds,
                 clip_bytes,
+                unique_id,
                 now_iso(),
             ),
         )
@@ -105,6 +107,7 @@ class ReplyChain:
             clip_file_id=picked.clip_file_id if picked else None,
             clip_seconds=picked.clip_seconds if picked else None,
             clip_bytes=picked.clip_bytes if picked else None,
+            unique_id=picked.unique_id if picked else None,
         )
 
     async def purge(self) -> int:
@@ -129,7 +132,8 @@ class ReplyChain:
 
             row = await self._db.fetchone(
                 "SELECT message_id, reply_to_id, user_id, display_name, text, has_media, "
-                "media_file_id, media_source, clip_file_id, clip_seconds, clip_bytes "
+                "media_file_id, media_source, clip_file_id, clip_seconds, clip_bytes, "
+                "unique_id "
                 "FROM group_cache WHERE chat_id = ? AND message_id = ?",
                 (chat_id, current),
             )

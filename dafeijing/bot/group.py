@@ -188,7 +188,7 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     if not await group_usable(svc, context.bot, message.chat_id):
         return
-    if not _is_addressed_to_bot(message, svc):
+    if not is_addressed_to_bot(message, svc):
         return
 
     allowed, wait = svc.limiter.check(user.id)
@@ -462,6 +462,8 @@ async def _gather_chain_notes(
             clip_file_id=item.get("clip_file_id"),
             clip_bytes=item.get("clip_bytes"),
             clip_seconds=item.get("clip_seconds"),
+            # 沒有這個就認不出「同一條片」—— 會每次重新外包，而且描述唔一致。
+            unique_id=item.get("unique_id"),
         )
         note = await media.describe_video(bot, picked, cfg, llm, db=db)
         if note is not None and note.text:
@@ -471,7 +473,7 @@ async def _gather_chain_notes(
     return notes
 
 
-def _is_addressed_to_bot(message, svc: Services) -> bool:
+def is_addressed_to_bot(message, svc: Services) -> bool:
     """被 @，或是回覆本鯨的訊息。圖片訊息要看 caption_entities。"""
     if message.reply_to_message and message.reply_to_message.from_user:
         if message.reply_to_message.from_user.id == svc.bot_id:
