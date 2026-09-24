@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dafeijing.core.webfetch import (
     extract,
-    extract_search_marker,
     find_urls,
     strip_citations,
     wants_search,
@@ -56,45 +55,6 @@ def test_handles_multiple_citations():
     assert "a.com" not in cleaned
     assert "b.com" not in cleaned
     assert "第一點" in cleaned and "第二點" in cleaned
-
-
-# ── 模型自主要求搜尋 ────────────────────────────────────
-
-
-def test_extract_search_marker():
-    text, query = extract_search_marker("[[搜尋:httpx 最新版本]]")
-    assert query == "httpx 最新版本"
-    assert "搜尋" not in text
-
-
-def test_search_marker_tolerates_spacing_and_fullwidth():
-    for raw in ("[[搜尋：今天天氣]]", "[[ 搜尋 : 今天天氣 ]]", "[[搜尋:今天天氣]]"):
-        _, query = extract_search_marker(raw)
-        assert query == "今天天氣", raw
-
-
-def test_search_marker_absent():
-    text, query = extract_search_marker("就是一段普通的回覆")
-    assert text == "就是一段普通的回覆"
-    assert query is None
-
-
-def test_search_marker_ignores_empty_query():
-    _, query = extract_search_marker("[[搜尋:   ]]")
-    assert query is None
-
-
-def test_search_marker_removes_only_the_marker():
-    """只移除標記本身，周圍文字保留。
-
-    第一次呼叫若寫了「等我查下」再輸出標記，那段內容本來就會被丟棄
-    （會帶著外掛重跑），所以不需要在這裡清掉。真正要防的是標記漏到
-    使用者眼前。
-    """
-    text, query = extract_search_marker("等我查下。\n\n[[搜尋:Rust 版本]]")
-    assert query == "Rust 版本"
-    assert "[[" not in text
-    assert "搜尋" not in text
 
 
 # ── 搜尋意圖 ────────────────────────────────────────────

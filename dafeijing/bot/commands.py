@@ -580,6 +580,8 @@ async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"　輸入 {total.get('prompt_tokens', 0):,}（快取命中 {total.get('cached_tokens', 0):,}）",
         f"　輸出 {total.get('completion_tokens', 0):,}（其中推理 {total.get('reasoning_tokens', 0):,}）",
         f"　圖片 {total.get('image_tokens', 0):,}",
+        f"　搜尋 {total.get('search_requests', 0):,} 次"
+        f"（${total.get('search_cost', 0.0):.4f}，已含於總額）",
         f"　費用 ${total.get('cost', 0.0):.4f}",
     ]
     if top:

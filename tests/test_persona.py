@@ -42,17 +42,21 @@ def test_capability_block_reflects_config():
     寫死「你沒有網路能力」的那一版，在聯網功能上線之後變成謊言 ——
     模型照著它回答，使用者就被告知「上唔到網」。
     """
-    with_search = Persona("角色").build(PersonaContext(can_search=True, can_fetch=True))
+    with_search = Persona("角色").build(
+        PersonaContext(can_fetch=True, search_policy="tool")
+    )
     assert "能聯網搜尋" in with_search
     assert "能讀取對方貼給你的連結" in with_search
 
-    without = Persona("角色").build(PersonaContext(can_search=False, can_fetch=False))
+    without = Persona("角色").build(
+        PersonaContext(can_fetch=False, search_policy="off")
+    )
     assert "沒有開啟聯網搜尋" in without
     assert "能聯網搜尋" not in without
 
 
 def test_capability_block_always_denies_execution():
-    for ctx in (PersonaContext(), PersonaContext(can_search=True, can_fetch=True)):
+    for ctx in (PersonaContext(), PersonaContext(can_fetch=True, search_policy="tool")):
         prompt = Persona("角色").build(ctx)
         assert "不能執行程式" in prompt
 
@@ -83,29 +87,47 @@ def test_notes_replace_the_empty_notice():
     assert "沒有關於這位對話對象的筆記" not in prompt
 
 
-def test_search_marker_is_only_advertised_when_no_search_is_running():
-    """只有在這一則還沒有搜尋時，才告訴模型它可以自己要求搜尋。
+def test_search_policy_drives_the_capability_text():
+    """能力說明要跟著「這一則實際走哪條搜尋路徑」走。
 
-    真實事故：問「今日恆指幾多」，判斷已經開了搜尋，但 persona 仍然叫模型
-    「只回覆 [[搜尋:...]]，不要寫其他內容」。模型照做 —— 那個標記就是它的
-    全部輸出，清掉之後變成空白，使用者收到一句沒頭沒腦的錯誤訊息。
+    講錯模型就會做出做不到的事 —— 例如叫人「等我查下」但這一則其實沒有搜尋，
+    或者反過來說自己上唔到網。
+
+    （原本還有一條 [[搜尋:...]] 標記機制，由模型輸出標記再帶外掛重跑。
+    改用伺服器端工具之後那條已經拆掉 —— 工具本身就是「讓模型自己決定」，
+    標記只是它的替代品，而且會產生「整則回覆只有標記、清完變空白」的問題。）
     """
-    advertising = Persona("角色").build(
-        PersonaContext(can_search=True, self_search=True)
-    )
-    assert "[[搜尋:" in advertising
+    # tool：模型自己決定搜幾次、搜什麼
+    tool = Persona("角色").build(PersonaContext(search_policy="tool"))
+    assert "決定權在你" in tool
+    assert "換個關鍵字再撈" in tool
+    assert "[[搜尋:" not in tool
 
-    quiet = Persona("角色").build(
-        PersonaContext(can_search=True, self_search=False)
-    )
-    assert "[[搜尋:" not in quiet
-    # 但「我查得到」仍然要講 —— 不然模型會說自己上唔到網
-    assert "能聯網搜尋" in quiet
+    # force：外掛已經強制搜過一次
+    forced = Persona("角色").build(PersonaContext(search_policy="force"))
+    assert "已經自動查過" in forced
+    assert "[[搜尋:" not in forced
+
+    # off：沒有搜尋
+    off = Persona("角色").build(PersonaContext(search_policy="off"))
+    assert "沒有開啟聯網搜尋" in off
+    assert "決定權在你" not in off
+
+
+def test_search_never_narrates_the_lookup():
+    """兩種搜尋路徑都要明講「查到就直接答，不要先講我要去查」。
+
+    實測帶伺服器端工具時，模型會先講一句英文旁白
+    （"I'll search for the latest …"）才回答 —— 使用者會看到，很突兀。
+    """
+    for policy in ("tool", "force"):
+        prompt = Persona("角色").build(PersonaContext(search_policy=policy))
+        assert "不要先講" in prompt
 
 
 def test_security_rule_does_not_deny_network_access():
     """安全界線不能斷言「沒有網路能力」—— 那會與實際功能矛盾。"""
-    prompt = Persona("角色").build(PersonaContext(can_search=True))
+    prompt = Persona("角色").build(PersonaContext(search_policy="tool"))
     assert "存取網路" not in prompt
 
 

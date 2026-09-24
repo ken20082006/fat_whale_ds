@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 from ..llm.decisions import (
     Assessment,
@@ -27,7 +28,6 @@ from .session import SessionManager, SessionRef, scope_for
 from .stickers import StickerLibrary, extract_marker
 from .util import today_text, truncate
 from .webfetch import (
-    extract_search_marker,
     fetch_all,
     find_urls,
     strip_citations,
@@ -49,6 +49,38 @@ VIBE_ORDER = ("low", "mid", "high")
 def _fmt_score(value: float | None) -> str:
     """日誌用。沒判斷到就寫 —，不要寫 None。"""
     return "—" if value is None else f"{value:.2f}"
+
+
+def _source_hosts(sources: list[str], limit: int = 3) -> list[str]:
+    """把來源網址收成最多幾個網域，去重並保持順序。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in sources or []:
+        try:
+            host = (urlparse(url).netloc or "").lower()
+        except ValueError:
+            continue
+        host = host.removeprefix("www.")
+        if host and host not in seen:
+            seen.add(host)
+            out.append(host)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _reply_with_sources(result) -> str:
+    """落庫用的回覆。有查到東西就附一行來源註記。
+
+    使用者看不到這一行（回覆已經送出去了），但**下一輪的模型看得到** ——
+    它才答得出「你邊度睇到」，也不會因為忘了自己查過而重複查。
+
+    用〔〕開頭與媒體標註一致，人設那邊有說明那是系統註記、不是它說過的話。
+    """
+    hosts = _source_hosts(result.sources)
+    if not hosts:
+        return result.text
+    return f"{result.text}\n〔查了：{'、'.join(hosts)}〕"
 
 
 def build_state(text: str, recent: list[dict], limit: int = 300) -> str:
@@ -144,22 +176,35 @@ class ChatService:
             personal, indicated, fallback=self._cfg.reasoning_enabled
         )
 
-    def _pick_search(self, req: ChatRequest, route: str | None) -> bool:
-        """搜尋：模式決定誰說了算。
+    def _pick_search(self, req: ChatRequest, route: str | None) -> str:
+        """這一則要怎麼搜。回傳 "off" / "tool" / "force"。
 
-        `off` 完全不搜；`always` 與 `/search`（force_search）是明確要求，
-        不受判斷影響；其餘（`auto` / `trigger`）交給判斷。
-
-        regex 在這裡只可以做**後備**、不可以做否決 —— 判斷失手時仍然捉得到
-        明講的「上網查」。反過來讓 regex 能否決判斷，就會退化回舊行為。
+        - `off`   完全不搜
+        - `tool`  帶伺服器端工具，由模型自己決定搜幾次、搜什麼
+        - `force` 走外掛強制搜一次 —— 伺服器端工具沒有 tool_choice、官方也
+                  沒記載可強制，所以「保證會搜」的場合只能走外掛。
         """
         mode = self._cfg.search_mode
+
+        # /search 是明確要求，即使模式是 off 也應該生效。舊版寫成
+        # `req.force_search and mode != "off"`，於是 off 之下 /search 會靜默
+        # 不查，使用者無從得知。
+        if req.force_search:
+            return "force"
         if mode == "off":
-            return False
-        if req.force_search or mode == "always":
-            return True
+            return "off"
+        if mode == "always":
+            return "force"
+        if mode == "trigger":
+            # 這個模式刻意只認明講的，所以不看判斷結果。
+            return "tool" if wants_search(req.text or "", mode) else "off"
+
+        # auto：交給判斷。regex 只做**後備**、不做否決 —— 判斷失手時仍然
+        # 捉得到明講的「上網查」。反過來讓 regex 能否決判斷就會退化回舊行為。
         _reason, by_route = route_flags(route)
-        return bool(by_route) or wants_search(req.text or "", mode)
+        if by_route or wants_search(req.text or "", mode):
+            return "tool"
+        return "off"
 
     async def respond(self, req: ChatRequest) -> ChatOutcome:
         user = await self._access.get_user(req.tg_user_id)
@@ -178,7 +223,8 @@ class ChatService:
         route = assessment.route if assessment else None
 
         reasoning = self._pick_reasoning(user, route)
-        search = self._pick_search(req, route)
+        search_mode = self._pick_search(req, route)
+        searching = search_mode != "off"
 
         # 要撈幾多條由判斷決定。外掛每次請求只搜一次、查詢由引擎自己從
         # 對話推導，這是唯一能調召回率的地方 —— 小眾名詞撈得少就會漏。
@@ -202,10 +248,10 @@ class ChatService:
                 _fmt_score(assessment.tone),
                 assessment.search_effort or "—",
                 "開" if reasoning else "關",
-                f"開（{wanted_results} 條）" if search else "關",
+                f"{search_mode}（{wanted_results} 條）" if searching else "關",
                 trigger_text[:20].replace("\n", " "),
             )
-        if search:
+        if searching:
             self.web_searches += 1
 
         # 長期筆記依場合分開：私聊獨立，每個群組也各自獨立。見 scope_for 的說明。
@@ -243,14 +289,8 @@ class ChatService:
                 ),
                 others_notes=others_notes,
                 group_profile=group_profile,
-                can_search=self._cfg.search_mode != "off",
                 can_fetch=self._cfg.fetch_max_urls > 0,
-                # 只有「這一則還沒有搜尋」時才告訴模型它可以自己要求搜尋。
-                # 否則它會照著那段指示「只回覆 [[搜尋:...]]，不要寫其他內容」，
-                # 而搜尋其實已經做過了 —— 標記被清掉之後整則回覆變成空白。
-                self_search=(
-                    not search and self._cfg.search_mode not in ("off", "always")
-                ),
+                search_policy=search_mode,
             )
         )
 
@@ -270,8 +310,6 @@ class ChatService:
             if pages:
                 page_blocks = [page.as_block() for page in pages]
                 self.fetched_pages += len(pages)
-
-        mode = self._cfg.search_mode
 
         # 送出去的用整條引用串；存進歷史的只用「對方自己那一句」。
         #
@@ -323,47 +361,17 @@ class ChatService:
             messages,
             max_tokens=max_tokens,
             reasoning=reasoning,
-            web_search=search,
+            search=search_mode == "tool",
+            force_search=search_mode == "force",
             search_results=wanted_results,
         )
 
-        # 模型自己要求搜尋：它只回了一行標記時，帶著外掛重跑一次。
-        # 這是唯一能讓模型自決的方法 —— web 外掛沒有「讓模型啟用自己」的介面。
+        # 清掉來源標註。外掛的預設行為會要模型標出處（格式像
+        # `(mashable.com (https://...))`），提示裡雖然已經叫它不要標，
+        # 模型不一定每次都聽，所以在輸出端再清一次。
         #
-        # 這裡**不是**「只有在搜尋還沒開時才處理」。模型即使已經拿到搜尋結果，
-        # 仍可能再要求查一次（persona 有教它這個標記）。而那段指示寫明
-        # 「只回覆這一行，不要寫其他內容」—— 標記往往就是它的全部輸出，
-        # 清掉之後變成空白，使用者只收到一句沒頭沒腦的錯誤訊息。
-        # 真實案例：問「今日恆指幾多」，判斷已開搜尋，模型仍只回了標記，
-        # 輸出 24 個 token，清完是空的。
-        stripped, query = extract_search_marker(result.text)
-        if query and mode != "off" and (not search or not stripped.strip()):
-            logger.info("模型要求搜尋：%s", query)
-            self.web_searches += 1
-            search = True
-            result = await self._llm.chat(
-                [
-                    *messages,
-                    {
-                        "role": "user",
-                        "content": (
-                            f"（先上網查「{query}」，再用查到的內容回答我上一則問題。"
-                            f"這次不要再輸出標記。）"
-                        ),
-                    },
-                ],
-                max_tokens=max_tokens,
-                reasoning=reasoning,
-                web_search=True,
-                search_results=wanted_results,
-            )
-
-        # 先把標記拿掉 —— 那是給系統看的，不能留在訊息裡。
-        # 模型有可能在第二次仍然輸出搜尋標記，所以兩種都清。
-        result.text, _ = extract_search_marker(result.text)
-
-        # 清掉來源標註。那是搜尋外掛的預設行為（要模型標出處），
-        # 提示裡雖然已經叫它不要標，模型不一定每次都聽，所以在輸出端再清一次。
+        # 伺服器端工具那條路不會產生這種標註 —— 它把來源放在
+        # message.annotations 裡（見 llm/openrouter.py），正文是乾淨的。
         result.text = strip_citations(result.text)
 
         if not result.text:
@@ -404,7 +412,9 @@ class ChatService:
         await self._sessions.append(
             req.session.id, "user", stored_content, has_image=bool(req.images)
         )
-        await self._sessions.append(req.session.id, "assistant", result.text)
+        await self._sessions.append(
+            req.session.id, "assistant", _reply_with_sources(result)
+        )
 
         await self._usage.record(
             user_id=req.tg_user_id,
@@ -415,6 +425,8 @@ class ChatService:
             cached_tokens=result.cached_tokens,
             reasoning_tokens=result.reasoning_tokens,
             image_tokens=result.image_tokens,
+            search_requests=result.search_requests,
+            search_cost=result.search_cost,
             cost=result.cost,
         )
 
@@ -445,7 +457,7 @@ class ChatService:
             result.completion_tokens,
             result.reasoning_tokens,
             result.cached_tokens,
-            "｜聯網搜尋" if search else "",
+            f"｜聯網搜尋（{search_mode}）" if searching else "",
             f"｜讀取 {len(page_blocks)} 個連結" if page_blocks else "",
         )
         return ChatOutcome(

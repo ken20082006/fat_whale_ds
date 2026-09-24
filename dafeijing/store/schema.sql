@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS usage_log (
     cached_tokens     INTEGER NOT NULL DEFAULT 0,
     reasoning_tokens  INTEGER NOT NULL DEFAULT 0,       -- 推理額度，以輸出計價
     image_tokens      INTEGER NOT NULL DEFAULT 0,
+    -- 這一輪搜尋了幾次。取自 usage.server_tool_use_details。
+    search_requests   INTEGER NOT NULL DEFAULT 0,
+    -- 當中屬於搜尋的部分。usage.cost 是總額且已含這筆，所以這個欄位是
+    -- cost 的子集，不是額外加上去的。
+    search_cost       REAL    NOT NULL DEFAULT 0,
     cost              REAL    NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL
 );

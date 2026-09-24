@@ -22,6 +22,8 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("users", "reasoning", "INTEGER"),
     ("usage_log", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("usage_log", "search_requests", "INTEGER NOT NULL DEFAULT 0"),
+    ("usage_log", "search_cost", "REAL NOT NULL DEFAULT 0"),
     ("memory_notes", "scope", "TEXT NOT NULL DEFAULT 'private'"),
     ("group_cache", "media_file_id", "TEXT"),
     ("group_cache", "media_source", "TEXT"),

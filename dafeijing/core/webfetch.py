@@ -20,6 +20,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..settings import SEARCH_MODES  # noqa: F401  （轉出，舊的 import 路徑仍可用）
+
 logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'）)】\]]+")
@@ -84,11 +86,6 @@ _CONTEXTUAL_HINTS = re.compile(
     re.I,
 )
 
-# 搜尋模式：off 不搜；trigger 只認明講的；auto 加上情境判斷；always 每則都搜。
-SEARCH_MODES = ("off", "trigger", "auto", "always")
-DEFAULT_SEARCH_MODE = "auto"
-
-
 @dataclass(frozen=True)
 class FetchedPage:
     url: str
@@ -98,25 +95,6 @@ class FetchedPage:
     def as_block(self) -> str:
         """包成提示裡的一段資料。"""
         return f"<網頁 url=\"{self.url}\" title=\"{self.title}\">\n{self.text}\n</網頁>"
-
-
-# 模型自己想查時輸出的標記。
-SEARCH_MARKER = re.compile(r"\[\[\s*搜尋\s*[:：]\s*(.+?)\s*\]\]")
-
-
-def extract_search_marker(text: str) -> tuple[str, str | None]:
-    """把「我要查」的標記抽出來，回傳 (清理後文字, 查詢字串)。
-
-    模型自己判斷要查時用這個表達 —— OpenRouter 的 web 外掛沒辦法讓模型
-    自行啟用，只能由模型發出訊號、我們再帶著外掛重跑一次。
-    """
-    match = SEARCH_MARKER.search(text or "")
-    if match is None:
-        return text, None
-
-    query = match.group(1).strip()
-    cleaned = SEARCH_MARKER.sub("", text).strip()
-    return cleaned, query or None
 
 
 # 來源標註的殘留。外掛的 search_prompt 已經叫模型不要標，但模型不一定每次都聽，

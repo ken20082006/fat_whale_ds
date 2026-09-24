@@ -5,7 +5,16 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 搜尋模式。放在這裡而不是 webfetch —— 設定值的合法範圍是設定層的事，
+# 而且要在載入時就驗證，不要等到第一次搜尋才發現打錯字。
+#   off      完全不搜
+#   trigger  只認明講的（「上網查」「search 一下」）
+#   auto     交給判斷（見 llm/decisions.py）
+#   always   每則都搜
+SEARCH_MODES = ("off", "trigger", "auto", "always")
 
 
 class Settings(BaseSettings):
@@ -28,9 +37,12 @@ class Settings(BaseSettings):
     max_retries: int = 3
 
     # ── 模型 ──
-    model: str = "deepseek/deepseek-chat"
-    model_vision: str = "deepseek/deepseek-chat"
-    model_utility: str = "deepseek/deepseek-chat"
+    # 預設用 v4.1-flash 而不是舊的 deepseek-chat：更便宜（$0.14/$0.42 對
+    # $0.32/$0.89）、上下文大 6 倍（100 萬對 16 萬）、而且**支援圖片**。
+    # 舊預設不吃圖，`.env` 一旦遺失或換機重建，視覺能力會靜靜失效。
+    model: str = "deepseek/deepseek-v4.1-flash"
+    model_vision: str = "deepseek/deepseek-v4.1-flash"
+    model_utility: str = "deepseek/deepseek-v4.1-flash"
 
     # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。
     # 實測關掉後單次費用約降為四分之一，對一般閒聊毫無損失。
@@ -85,6 +97,9 @@ class Settings(BaseSettings):
     # 撈得少就會直接漏掉。
     search_results_quick: int = 3
     search_results_thorough: int = 10
+    # 伺服器端工具一次請求的結果總上限。**限結果不限請求** —— 這個參數只
+    # 轉發給部分引擎，其餘會忽略，真正的搜尋次數上限約 3 次。
+    search_max_total_results: int = 15
     # 一則訊息最多讀幾個對方貼的連結
     fetch_max_urls: int = 3
 
@@ -181,6 +196,20 @@ class Settings(BaseSettings):
 
     def is_admin(self, tg_user_id: int | None) -> bool:
         return tg_user_id is not None and tg_user_id in self.admin_ids
+
+    @field_validator("search_mode")
+    @classmethod
+    def _validate_search_mode(cls, value: str) -> str:
+        """打錯字要立刻報錯，不要靜默失效。
+
+        未知的模式會落到 wants_search() 的預設分支，行為像 auto ——
+        設定的人以為生效了，其實沒有。
+        """
+        if value not in SEARCH_MODES:
+            raise ValueError(
+                f"FW_SEARCH_MODE 只能是 {' / '.join(SEARCH_MODES)}，收到 {value!r}"
+            )
+        return value
 
     def ensure_dirs(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

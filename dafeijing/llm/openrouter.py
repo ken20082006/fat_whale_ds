@@ -10,6 +10,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import httpx
 
@@ -35,10 +36,23 @@ class LLMResult:
     image_tokens: int = 0
     cost: float = 0.0
     finish_reason: str | None = None
+    # 伺服器端工具回報的搜尋次數。欄位是 server_tool_use_details，
+    # 不是 server_tool_use —— 文件沒寫，是實測出來的。
+    search_requests: int = 0
+    # 這一輪引用了哪些來源（去重、去追蹤參數）。只記在日誌與歷史註記，
+    # 不顯示給使用者。
+    sources: list[str] = field(default_factory=list)
+    # usage.cost 是**總額，已含搜尋費**。這個是當中的推論部分，
+    # 相減就得到搜尋費 —— 比另外估準。
+    inference_cost: float = 0.0
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def search_cost(self) -> float:
+        return max(0.0, self.cost - self.inference_cost)
 
 
 _RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504, 520, 522, 524}
@@ -71,8 +85,9 @@ class OpenRouterClient:
         max_tokens: int | None = None,
         temperature: float = 1.0,
         reasoning: bool | None = None,
-        web_search: bool = False,
+        search: bool = False,
         search_results: int | None = None,
+        force_search: bool = False,
     ) -> LLMResult:
         payload = {
             "model": model or self._cfg.model,
@@ -88,15 +103,22 @@ class OpenRouterClient:
         if reasoning is False:
             payload["reasoning"] = {"enabled": False}
 
-        # 聯網搜尋。由 OpenRouter 代為搜尋，結果以摘要形式注入並附上來源標註。
-        # 這是獨立的計費項目，與 token 分開算。
-        if web_search:
+        # 聯網搜尋有兩條路，互斥：
+        #
+        # 1. **伺服器端工具**（預設）—— 模型自己決定搜幾次、用什麼查詢，
+        #    而且拿到的是原文片段而不是引擎摘要。它會反覆搜（實測一次請求
+        #    搜 2–4 次），所以「先撈一次冇，再換個講法撈」做得到。
+        # 2. **web 外掛**（force_search）—— 保證每次請求至少搜一次，但查詢
+        #    由引擎從對話推導、模型無權指定，拿到的是摘要，而且只搜一次。
+        #
+        # 只有需要「保證會搜」的場合（always 與 /search）才走外掛 ——
+        # 伺服器端工具沒有 tool_choice，官方也沒記載可強制，所以無法用
+        # 參數逼它搜。
+        if force_search:
             plugin: dict = {
                 "id": "web",
                 "engine": self._cfg.search_engine,
                 # 撈幾多條由呼叫端逐次決定（判斷出來的搜尋力度），不是寫死。
-                # 外掛每次請求只搜一次、查詢由引擎自己從對話推導 —— 這個數字
-                # 是唯一能調召回率的地方，小眾名詞撈得少就會直接漏掉。
                 "max_results": search_results or self._cfg.search_max_results,
                 # 外掛的預設指示會要模型標出來源（格式像 `(網域 (網址))`），
                 # 那是它的預設行為，不是模型自己愛貼。這裡直接覆蓋掉。
@@ -108,6 +130,19 @@ class OpenRouterClient:
             if self._cfg.search_engine_mode:
                 plugin["mode"] = self._cfg.search_engine_mode
             payload["plugins"] = [plugin]
+        elif search:
+            parameters: dict = {
+                "engine": self._cfg.search_engine,
+                "max_results": search_results or self._cfg.search_max_results,
+                # 一次請求的總上限。**限結果不限請求** —— 這個參數只轉發給
+                # 部分引擎，其他引擎忽略它，真正的次數上限約 3 次。
+                "max_total_results": self._cfg.search_max_total_results,
+            }
+            if self._cfg.search_engine_mode:
+                parameters["mode"] = self._cfg.search_engine_mode
+            payload["tools"] = [
+                {"type": "openrouter:web_search", "parameters": parameters}
+            ]
 
         data = await self._post(payload)
         return self._parse(data)
@@ -172,16 +207,35 @@ class OpenRouterClient:
 
         choice = choices[0]
         message = choice.get("message") or {}
-        text = (message.get("content") or "").strip()
+        finish_reason = choice.get("finish_reason")
+        text = _read_content(message.get("content"))
 
         usage = data.get("usage") or {}
         prompt_details = usage.get("prompt_tokens_details") or {}
         completion_details = usage.get("completion_tokens_details") or {}
         reasoning_tokens = int(completion_details.get("reasoning_tokens") or 0)
 
+        # 搜尋次數在 server_tool_use_details，**不是** server_tool_use。
+        # 文件沒寫清楚，是實測出來的 —— 照文件那樣讀會永遠拿到 0，
+        # 而且是靜默失效。
+        tool_use = usage.get("server_tool_use_details") or {}
+        search_requests = int(tool_use.get("web_search_requests") or 0)
+
+        # usage.cost 是**總額、已含搜尋費**；cost_details 裡的
+        # upstream_inference_cost 才是當中的推論部分。相減就精確得到
+        # 搜尋費，不必另外估。
+        cost_details = usage.get("cost_details") or {}
+        cost = float(usage.get("cost") or 0.0)
+        inference_cost = float(cost_details.get("upstream_inference_cost") or cost)
+
         if not text:
+            if finish_reason == "tool_calls":
+                raise LLMError("本鯨查完之後來不及講，再問一次好嗎。")
+            if finish_reason == "length" and search_requests:
+                # 與「想得太久」不同：這裡是查完之後寫不完，叫它關推理沒有用。
+                raise LLMError("本鯨查到的東西太多，講不完。問題問窄一點再試。")
             # 推理模型可能把整個額度花在思考上，導致 content 是空的。
-            if choice.get("finish_reason") == "length" or reasoning_tokens:
+            if finish_reason == "length" or reasoning_tokens:
                 raise LLMError(
                     "本鯨想得太久，額度用完了。縮短問題，或用 /think off 關掉深度思考。"
                 )
@@ -197,9 +251,68 @@ class OpenRouterClient:
             cached_tokens=int(prompt_details.get("cached_tokens") or 0),
             reasoning_tokens=reasoning_tokens,
             image_tokens=int(completion_details.get("image_tokens") or 0),
-            cost=float(usage.get("cost") or 0.0),
-            finish_reason=choice.get("finish_reason"),
+            cost=cost,
+            finish_reason=finish_reason,
+            search_requests=search_requests,
+            sources=_read_sources(message.get("annotations")),
+            inference_cost=inference_cost,
         )
+
+
+def _read_content(raw) -> str:
+    """讀出回覆正文。content 可能是字串，也可能是陣列。
+
+    實測帶伺服器端工具時它是**字串**，但文件兩種都寫過，所以兩種都吃 ——
+    直接對陣列呼叫 .strip() 會 AttributeError。
+    """
+    if isinstance(raw, list):
+        parts = [
+            part.get("text") or ""
+            for part in raw
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        return "".join(parts).strip()
+    return (raw or "").strip()
+
+
+def _read_sources(annotations) -> list[str]:
+    """從 annotations 取出引用來源。
+
+    實測形狀是 `{"type": "url_citation", "url_citation": {"url", "title", …}}`
+    的陣列。注意 `start_index` / `end_index` **全部是 0** —— 引用沒有錨定在
+    正文位置，所以做不到「標在對應句子上」，最多只能附一份來源清單。
+    """
+    if not isinstance(annotations, list):
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in annotations:
+        if not isinstance(item, dict) or item.get("type") != "url_citation":
+            continue
+        citation = item.get("url_citation") or {}
+        url = _clean_url(str(citation.get("url") or ""))
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+def _clean_url(url: str) -> str:
+    """去掉追蹤參數。實測回傳的網址帶著 utm_source / utm_medium。"""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if not parsed.query:
+        return url
+    kept = [
+        pair
+        for pair in parsed.query.split("&")
+        if not pair.lower().startswith(("utm_", "fbclid", "gclid"))
+    ]
+    return parsed._replace(query="&".join(kept)).geturl()
 
 
 def _extract_error(response: httpx.Response) -> str:

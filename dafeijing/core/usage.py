@@ -29,12 +29,15 @@ class UsageLog:
         cached_tokens: int = 0,
         reasoning_tokens: int = 0,
         image_tokens: int = 0,
+        search_requests: int = 0,
+        search_cost: float = 0.0,
         cost: float = 0.0,
     ) -> None:
         await self._db.execute(
             "INSERT INTO usage_log (user_id, chat_id, model, prompt_tokens, completion_tokens, "
-            "cached_tokens, reasoning_tokens, image_tokens, cost, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "cached_tokens, reasoning_tokens, image_tokens, search_requests, search_cost, "
+            "cost, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 chat_id,
@@ -44,6 +47,8 @@ class UsageLog:
                 cached_tokens,
                 reasoning_tokens,
                 image_tokens,
+                search_requests,
+                search_cost,
                 cost,
                 now_iso(),
             ),
@@ -80,6 +85,8 @@ class UsageLog:
             "COALESCE(SUM(cached_tokens), 0) AS cached_tokens, "
             "COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens, "
             "COALESCE(SUM(image_tokens), 0) AS image_tokens, "
+            "COALESCE(SUM(search_requests), 0) AS search_requests, "
+            "COALESCE(SUM(search_cost), 0) AS search_cost, "
             "COALESCE(SUM(cost), 0) AS cost "
             f"FROM usage_log WHERE created_at >= datetime('now', ?) {extra_where}",
             (f"-{days} days", *params),
