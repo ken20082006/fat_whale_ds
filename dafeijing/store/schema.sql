@@ -137,6 +137,21 @@ CREATE TABLE IF NOT EXISTS usage_log (
 CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_log(created_at);
 
+-- 外包看片的結果，按媒體的**穩定**識別碼（file_unique_id）存。
+--
+-- 為什麼要快取：同一條片再傳，外包模型會給出**唔同**的描述 —— 實測同一條
+-- GIF 三次得到「鯨魚噴水」「掀檯」「街頭窄巷」三個答案。快取令它一致，
+-- 而且同一條片第二次開始免費。
+--
+-- 用 file_unique_id 而非 file_id：後者會隨時間輪換。
+CREATE TABLE IF NOT EXISTS media_notes (
+    unique_id   TEXT PRIMARY KEY,
+    source      TEXT,
+    description TEXT NOT NULL,
+    model       TEXT,
+    created_at  TEXT NOT NULL
+);
+
 -- 群組概況。每個群一則，描述「這個群體本身」—— 主題、氣氛、慣例、近期話題。
 --
 -- 與 memory_notes 的分別：筆記是「關於某個人」的事實，每一則都屬於一個

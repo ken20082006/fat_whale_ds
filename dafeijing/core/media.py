@@ -1,17 +1,14 @@
 """把 Telegram 的媒體轉成模型看得懂的格式。
 
-主模型收不下影片與動態貼圖本身，所以換成「幾格畫面」送進去。能取幾格
-取決於來源：動畫 GIF 由 Pillow 逐格解，影片由 ffmpeg 抽格，其餘只有一張。
+**圖片**轉成 JPEG 並縮到長邊上限，直接送給主模型 —— 原圖可能很大，而 token
+成本隨尺寸上升，縮圖對辨識力的損失微乎其微。
 
-**但抽格只看得到幾個瞬間** —— 連續動作、節奏、字幕變化都看不到。所以
-另外有一條路：把整段影片外包給吃得了影片的模型，拿一段文字解說回來
-（見 `describe_video`）。外包成功就不必再送圖。
+**影片與動圖不走這條路。** 主模型收不下影片本身，而抽幾個定格看不出連續
+動作、節奏與字幕變化，還會讓模型以為自己看過整段、講出半真半假的描述。
+所以整段片外包給吃得了影片的模型，拿一段文字解說回來（見 `describe_video`）。
+外包不成就是沒有這個媒體 —— **不抽格充數**。
 
-圖片一律轉成 JPEG 並縮到長邊上限 —— 原圖可能很大，而 token 成本隨尺寸上升，
-縮圖對辨識力的損失微乎其微。
-
-所有內容一律只在記憶體中處理，唯一例外是影片抽格時必須落的暫存檔，
-它在同一個函式內建立與刪除，不跨請求保留任何東西。
+所有內容一律只在記憶體中處理，不落任何暫存檔。
 """
 
 from __future__ import annotations
@@ -20,14 +17,11 @@ import asyncio
 import base64
 import io
 import logging
-import shutil
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
-from .util import truncate
+from .util import now_iso, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +29,6 @@ logger = logging.getLogger(__name__)
 # 這個值由實測回推：一張 512x512 的圖約佔 170 token。
 # 只用於送出前估算上下文佔用，不用於計費 —— 計費一律看 API 回傳的 usage。
 _PATCH = 40
-
-# 抽單一格的逾時。快 seek 之後正常是毫秒級，這個值只是防止卡死。
-FFMPEG_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
@@ -73,6 +64,10 @@ class Picked:
     clip_file_id: str | None = None
     clip_bytes: int | None = None
     clip_seconds: float | None = None
+    # Telegram 的**穩定**識別碼。file_id 會隨時間輪換，file_unique_id 不會，
+    # 所以外包描述的快取要用這一個當鍵 —— 同一條片再傳就重用同一個描述，
+    # 既一致又免費。
+    unique_id: str | None = None
 
 
 class MediaError(RuntimeError):
@@ -111,8 +106,11 @@ class VideoNote:
     skipped: str = ""
 
 
-# 這三種都是「一段影片」—— 值得外包去看，而且**不可以只抽幾格充數**。
-MOTION_SOURCES = ("video", "video_note", "animation")
+# 這幾種都是「一段影片」—— 值得外包去看，而且**不可以只抽幾格充數**。
+#
+# `sticker_motion` 是影片貼紙（.webm）。它不在 `sticker` 裡面，因為靜態貼圖
+# 與動態貼圖（.tgs）都是靜態內容，只有影片貼紙才真的動得起來。
+MOTION_SOURCES = ("video", "video_note", "animation", "sticker_motion")
 
 
 def is_motion(picked: "Picked") -> bool:
@@ -134,16 +132,54 @@ def sniff_mime(blob: bytes) -> str:
     return "video/mp4"
 
 
-async def describe_video(bot, picked: "Picked", cfg, llm) -> VideoNote | None:
+async def get_cached_note(db, unique_id: str | None) -> str | None:
+    """查這條媒體之前外包過的描述。
+
+    **快取不只是省錢，也是為了一致。** 實測同一條 GIF 外包三次得到
+    「鯨魚噴水」「掀檯」「街頭窄巷」三個唔同描述 —— 外包模型對短片的
+    抽樣不穩定，會自己補。用同一個識別碼鎖住同一個答案。
+    """
+    if db is None or not unique_id:
+        return None
+    row = await db.fetchone(
+        "SELECT description FROM media_notes WHERE unique_id = ?", (unique_id,)
+    )
+    return row["description"] if row else None
+
+
+async def remember_note(
+    db, unique_id: str | None, source: str | None, text: str, model: str
+) -> None:
+    """記住這次外包的結果。同一個 unique_id 再來就重用，不再付費。"""
+    if db is None or not unique_id:
+        return
+    await db.execute(
+        "INSERT INTO media_notes (unique_id, source, description, model, created_at) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(unique_id) DO UPDATE SET description = excluded.description, "
+        "model = excluded.model, created_at = excluded.created_at",
+        (unique_id, source, text, model, now_iso()),
+    )
+
+
+async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote | None:
     """把整段動態素材交給外援模型看，拿回一段解說。
 
     **失敗一律回 None**，由呼叫端退回抽格 —— 外包是加分項，不是必要路徑。
     所以這裡連例外都不往外丟：外包掛掉不該讓整則訊息讀不到。
 
     llm 為 None（或未開啟）時直接跳過，呼叫端就不會多付一次呼叫。
+    db 有值時會按 media 的穩定識別碼快取結果 —— 同一條片再傳就重用。
     """
-    if llm is None or not cfg.video_delegate_enabled:
+    if llm is None:
         return None
+
+    # 快取要放在大小／長度檢查之前：那是**已經付過錢**的答案，
+    # 沒有理由因為省錢的判斷而丟掉它。
+    cached = await get_cached_note(db, picked.unique_id)
+    if cached:
+        logger.info("外包看片：命中快取（%s）", picked.source)
+        return VideoNote(text=cached, model="cache")
 
     # 有本體就用本體；真 GIF 沒有 clip_*，它的 file_id 本身就是 GIF 本體。
     file_id = picked.clip_file_id or picked.file_id
@@ -196,17 +232,16 @@ async def describe_video(bot, picked: "Picked", cfg, llm) -> VideoNote | None:
     if not text:
         return None
 
+    text = truncate(text, cfg.video_delegate_max_chars)
+    await remember_note(db, picked.unique_id, picked.source, text, result.model)
+
     logger.info(
         "外包看片：%s → %d 字（$%.6f）",
         picked.source,
         len(text),
         result.cost,
     )
-    return VideoNote(
-        text=truncate(text, cfg.video_delegate_max_chars),
-        cost=result.cost,
-        model=result.model,
-    )
+    return VideoNote(text=text, cost=result.cost, model=result.model)
 
 
 # 過大的檔案另外給一句話。「拿不到檔案、可能是網路不穩」對一個太大的檔案
@@ -218,49 +253,19 @@ TOO_BIG = "這個檔案太大了，本鯨讀不動。傳小一點的，或者截
 
 
 async def collect_media(bot, picked: Picked, cfg) -> list[PreparedImage]:
-    """取得一則媒體該送進模型的畫面，一張或多張。
+    """取得一則媒體該送進模型的畫面。
 
-    單張、GIF 多格、影片多格三條路都在這裡收斂，呼叫端不必知道差別。
-    每一條多格的路失敗都會退回單張 —— 讀少幾格，總比整則訊息讀不到好。
+    **只處理靜態媒體。** 影片與動圖一律走 `describe_video` 外包 ——
+    抽出來的幾個定格看不出連續動作，卻會讓模型以為自己看過整段，
+    然後講出半真半假的描述。
     """
-    max_bytes = cfg.image_max_bytes
-    frames = cfg.media_frames
-
-    # 真 GIF：Pillow 自己逐格解得開，不必下載縮圖，也不必用到 ffmpeg。
-    if picked.source == "animation" and picked.clip_file_id is None:
-        if _fits(picked.declared_bytes, max_bytes) and frames > 1:
-            blob = await _download(bot, picked.file_id, max_bytes=max_bytes)
-            sampled = prepare_gif_frames(
-                blob, max_edge=cfg.image_max_edge, source=picked.source, frames=frames
-            )
-            if sampled:
-                return sampled
-
-    # 影片與被轉成 MP4 的動圖：本體在長度與大小上限之內才值得下載來抽格。
-    if picked.clip_file_id and frames > 1 and _clip_within_limits(picked, cfg):
-        try:
-            blob = await _download(bot, picked.clip_file_id, max_bytes=max_bytes)
-        except MediaError as exc:
-            logger.info("影片本體取不到，退回縮圖：%s", exc)
-        else:
-            sampled = await prepare_video_frames(
-                blob,
-                max_edge=cfg.image_max_edge,
-                source=picked.source,
-                count=frames,
-                duration=picked.clip_seconds,
-            )
-            if sampled:
-                return sampled
-            logger.info("抽格沒有結果，退回單張：%s", picked.source)
-
     return [
         await prepare_from_telegram(
             bot,
             picked.file_id,
             max_edge=cfg.image_max_edge,
             source=picked.source,
-            max_bytes=max_bytes,
+            max_bytes=cfg.image_max_bytes,
         )
     ]
 
@@ -316,23 +321,6 @@ def _fits(declared_bytes: int | None, max_bytes: int) -> bool:
     return declared_bytes is None or declared_bytes <= max_bytes
 
 
-def _clip_within_limits(picked: Picked, cfg) -> bool:
-    """影片值不值得下載本體來抽格。
-
-    太長或太大的就只取縮圖 —— 完整解碼一段長片會讓回覆延遲到無法接受。
-    兩個欄位都可能是 None（Telegram 不一定給），沒給就不擋。
-    """
-    if cfg.media_max_seconds <= 0:
-        return False
-    if picked.clip_seconds is not None and picked.clip_seconds > cfg.media_max_seconds:
-        logger.info("影片過長（%.0fs），只取一格", picked.clip_seconds)
-        return False
-    if picked.clip_bytes is not None and picked.clip_bytes > cfg.image_max_bytes:
-        logger.info("影片過大（%d bytes），只取一格", picked.clip_bytes)
-        return False
-    return True
-
-
 # ── 解碼與編碼 ──────────────────────────────────────────
 
 
@@ -372,178 +360,17 @@ def prepare_from_bytes(blob: bytes, *, max_edge: int, source: str) -> PreparedIm
         return _encode(opened.convert("RGBA"), max_edge=max_edge, source=source)
 
 
-def prepare_gif_frames(
-    blob: bytes, *, max_edge: int, source: str, frames: int
-) -> list[PreparedImage]:
-    """從動畫 GIF 逐格取樣。
-
-    Pillow 本身就支援逐格讀取，所以這條路不需要 ffmpeg。
-    靜態 GIF（只有一格）就回一張。
-    """
-    images: list[PreparedImage] = []
-
-    with _decode(blob) as opened:
-        total = int(getattr(opened, "n_frames", 1) or 1)
-        for index in frame_indexes(total, frames):
-            try:
-                opened.seek(index)
-                images.append(
-                    _encode(opened.convert("RGBA"), max_edge=max_edge, source=source)
-                )
-            except (OSError, EOFError) as exc:
-                # 有些 GIF 的格表是壞的，讀到中途才爆。已經拿到的照用，別整批丟掉。
-                logger.warning("GIF 第 %d 格讀不出來：%s", index, exc)
-                break
-
-    return images
-
-
-async def prepare_video_frames(
-    blob: bytes,
-    *,
-    max_edge: int,
-    source: str,
-    count: int,
-    duration: float | None,
-) -> list[PreparedImage]:
-    """用 ffmpeg 從影片抽幾格。
-
-    影片必須先落到暫存檔才能做時間定位 —— 對不可 seek 的 pipe 下 -ss，
-    ffmpeg 只能從頭解碼到尾，每抽一格就要重解一次整段片。
-    暫存目錄在離開時自動刪除，不跨請求保留任何東西。
-    """
-    exe = ffmpeg_exe()
-    if exe is None:
-        logger.info("找不到 ffmpeg，影片只取一格")
-        return []
-
-    frames: list[PreparedImage] = []
-
-    with tempfile.TemporaryDirectory(prefix="fatwhale-clip-") as tmp:
-        path = Path(tmp) / "clip.bin"
-        path.write_bytes(blob)
-
-        for at in sample_offsets(duration, count):
-            raw = await _ffmpeg_grab(exe, path, at)
-            if raw is None:
-                continue
-            try:
-                frames.append(prepare_from_bytes(raw, max_edge=max_edge, source=source))
-            except MediaError:
-                continue
-
-    return frames
-
-
-def ffmpeg_exe() -> str | None:
-    """找 ffmpeg 執行檔。
-
-    優先使用 imageio-ffmpeg 自帶的那一份 —— VPS 上不必另裝系統套件。
-    退回 PATH 上的 ffmpeg 是為了開發機（通常已經裝了），也讓
-    imageio-ffmpeg 沒裝起來時至少還能抽格。
-    兩者都沒有就回 None，呼叫端退回單張畫面。
-    """
-    try:
-        import imageio_ffmpeg
-
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        pass
-    return shutil.which("ffmpeg")
-
-
-async def _ffmpeg_grab(exe: str, path: Path, at: float) -> bytes | None:
-    """抓單一格，回傳 PNG 位元組，失敗回 None。
-
-    -ss 放在 -i 之前是關鍵：那是關鍵格快 seek，有檔案時幾乎是即時的。
-    放在後面就得從頭解碼到尾，一段三分鐘的片會慢到無法接受。
-    """
-    proc = await asyncio.create_subprocess_exec(
-        exe,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-ss",
-        f"{at:.3f}",
-        "-i",
-        str(path),
-        "-frames:v",
-        "1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "png",
-        "pipe:1",
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), FFMPEG_TIMEOUT)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        logger.warning("ffmpeg 抽格逾時（%.3fs）", at)
-        return None
-
-    if proc.returncode != 0 or not out:
-        logger.warning(
-            "ffmpeg 抽格失敗（%.3fs）：%s", at, err.decode("utf-8", "replace")[:200]
-        )
-        return None
-    return out
-
-
-# ── 取樣位置 ────────────────────────────────────────────
-
-
-def sample_offsets(duration: float | None, count: int) -> list[float]:
-    """影片要抓哪幾個時間點。
-
-    中段均勻分佈，避開首尾 —— 開頭常是標題卡或黑格，結尾常是 logo，
-    兩者都看不出內容。長度不明就抓開頭。
-    """
-    if not duration or duration <= 0:
-        return [0.0]
-    if count <= 1:
-        return [duration / 2]
-
-    start, end = duration * 0.15, duration * 0.85
-    if end <= start:
-        return [duration / 2]
-
-    step = (end - start) / (count - 1)
-    return [start + step * index for index in range(count)]
-
-
-def frame_indexes(total: int, count: int) -> list[int]:
-    """動畫 GIF 要取哪幾格。格數不比要的多的話就全部取。"""
-    if count <= 1:
-        return [0]
-    if total <= count:
-        return list(range(total))
-
-    start, end = total * 0.15, total * 0.85
-    step = (end - start) / (count - 1)
-    picks = {
-        min(total - 1, max(0, round(start + step * index))) for index in range(count)
-    }
-    return sorted(picks)
-
-
 # ── 標註與挑選 ──────────────────────────────────────────
 
 
-def describe(message, frames: int | None = None) -> str:
+def describe(message) -> str:
     """為帶媒體的訊息產生一行標註。
 
     這是給對話紀錄與引用串用的中繼資料，不是給模型看的圖說 ——
     寫成客觀標註而非描述，才不會誘導它去描述畫面。
 
-    frames 是實際送進模型的畫面格數。動態素材一定要講清楚是幾格，
-    否則模型會以為自己看過整段。引用串在快取階段只有文字、還不知道格數，
-    那時傳 None，不寫出可能錯的數字。
+    **動態素材不寫格數。** 已經沒有抽格這回事了：影片與動圖一律外包，
+    內容由 describe_video 的解說負責。
     """
     if message.sticker:
         # 刻意不寫出 sticker.emoji。那是貼圖包作者標的，不一定對應畫面內容，
@@ -551,29 +378,18 @@ def describe(message, frames: int | None = None) -> str:
         kind = "動態貼圖" if message.sticker.is_animated else (
             "影片貼圖" if message.sticker.is_video else "貼圖"
         )
-        if message.sticker.is_animated or message.sticker.is_video:
-            return _frame_marker(kind, frames)
         return f"〔{kind}〕"
 
     if message.animation:
-        return _frame_marker("動圖", frames)
+        return "〔動圖〕"
     if message.video:
-        return _frame_marker("影片", frames)
+        return "〔影片〕"
     if message.video_note:
-        return _frame_marker("圓形影片", frames)
+        return "〔圓形影片〕"
 
     if message.photo:
         return "〔圖片〕"
     return "〔檔案〕"
-
-
-def _frame_marker(kind: str, frames: int | None) -> str:
-    """標出這是動態素材，以及模型實際拿到幾格。"""
-    if frames is None:
-        return f"〔{kind}〕"
-    if frames <= 1:
-        return f"〔{kind}，只有第一格畫面〕"
-    return f"〔{kind}，{frames} 格畫面〕"
 
 
 def _animation_is_image(animation) -> bool:
@@ -589,7 +405,12 @@ def _thumbnail(media, source: str) -> Picked | None:
     """只有一張縮圖可用的媒體。沒有縮圖就放棄。"""
     if media.thumbnail is None:
         return None
-    return Picked(media.thumbnail.file_id, source, media.thumbnail.file_size)
+    return Picked(
+        media.thumbnail.file_id,
+        source,
+        media.thumbnail.file_size,
+        unique_id=media.file_unique_id,
+    )
 
 
 def _clip(media, source: str) -> Picked | None:
@@ -603,6 +424,7 @@ def _clip(media, source: str) -> Picked | None:
         clip_file_id=media.file_id,
         clip_bytes=media.file_size,
         clip_seconds=media.duration,
+        unique_id=media.file_unique_id,
     )
 
 
@@ -611,19 +433,33 @@ def pick_file(message) -> Picked | None:
 
     Telegram 對每一種媒體都附上第一格的靜態縮圖，所以除了真正的 GIF 之外，
     一律以縮圖為底 —— 貼圖是 webp 動畫或 webm，模型都不收，而縮圖已經是 JPEG。
-    影片另外帶上本體，長度與大小許可時可以抽多格。
     """
     if message.sticker:
         sticker = message.sticker
-        if sticker.is_animated or sticker.is_video:
+
+        # **影片貼紙（.webm）是真的影片** —— 外包看得了，而且貼圖的
+        # file_unique_id 永久穩定，所以睇一次就快取住，之後同一張唔使再睇。
+        if sticker.is_video:
+            return _clip(sticker, "sticker_motion")
+
+        # **動態貼紙（.tgs）是 Lottie JSON，不是影片** —— 外包看唔到，
+        # 只有縮圖那張靜態圖可用，所以走一般圖片那條路。
+        if sticker.is_animated:
             return _thumbnail(sticker, "sticker")
-        return Picked(sticker.file_id, "sticker", sticker.file_size)
+
+        return Picked(
+            sticker.file_id, "sticker", sticker.file_size,
+            unique_id=sticker.file_unique_id,
+        )
 
     if message.animation:
         animation = message.animation
         if _animation_is_image(animation):
             # 真 GIF：Pillow 解得開，下載本體逐格抽，解析度比縮圖好得多。
-            return Picked(animation.file_id, "animation", animation.file_size)
+            return Picked(
+                animation.file_id, "animation", animation.file_size,
+                unique_id=animation.file_unique_id,
+            )
         # 被轉成 MP4 的動圖：Pillow 開不了，交給 ffmpeg，退路是縮圖。
         return _clip(animation, "animation")
 
@@ -636,10 +472,16 @@ def pick_file(message) -> Picked | None:
     if message.photo:
         # photo 是各種尺寸的列表，最後一個最大
         largest = message.photo[-1]
-        return Picked(largest.file_id, "photo", largest.file_size)
+        return Picked(
+            largest.file_id, "photo", largest.file_size,
+            unique_id=largest.file_unique_id,
+        )
 
     document = message.document
     if document is not None and (document.mime_type or "").startswith("image/"):
-        return Picked(document.file_id, "photo", document.file_size)
+        return Picked(
+            document.file_id, "photo", document.file_size,
+            unique_id=document.file_unique_id,
+        )
 
     return None

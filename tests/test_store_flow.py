@@ -371,6 +371,7 @@ def test_cache_from_update_extracts_sticker_file_id():
                 is_video=False,
                 emoji="😭",
                 file_id="sticker-1",
+                file_unique_id="sticker-u1",
                 file_size=None,
                 thumbnail=None,
             )

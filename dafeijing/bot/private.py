@@ -47,7 +47,9 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
 
-    text, images = await collect(message, context.bot, svc.cfg, llm=svc.llm)
+    text, images = await collect(
+        message, context.bot, svc.cfg, llm=svc.llm, db=svc.db
+    )
     if text is None:
         await message.reply_text("這種訊息本鯨還讀不懂。用文字、圖片或貼圖都可以。")
         return

@@ -22,6 +22,7 @@ async def collect(
     *,
     include_reply: bool = True,
     llm=None,
+    db=None,
 ) -> tuple[str | None, list[PreparedImage]]:
     """回傳 (文字, 圖片列表)。不支援的訊息型態回傳 (None, [])。
 
@@ -32,6 +33,9 @@ async def collect(
     llm 有值時，動態素材會外包給吃得了影片的模型拿一段解說
     （見 media.describe_video）。**外包不成就當作沒有這個媒體** ——
     見下方「睇唔到就直接唔睇」。
+
+    db 有值時，解說會按媒體的穩定識別碼快取 —— 同一條片再傳就重用同一個
+    描述，既一致又免費。
     """
     images: list[PreparedImage] = []
     # 主要這一則自己貢獻了幾張。標註要寫對格數，所以得和引用的那一則分開算。
@@ -63,14 +67,11 @@ async def collect(
                 return None, []
             continue
 
-        if media.is_motion(picked) and cfg.video_delegate_enabled:
-            # **睇唔到就直接唔睇。** 動態素材不再抽幾格充數 —— 一個定格看不出
-            # 連續動作，卻會讓模型以為自己看過，然後講出半真半假的描述。
-            # 外包成功就用解說，失敗就當作沒有這個媒體，並把原因講出來。
-            #
-            # 外包**關掉**時不走這條路，而是回到舊的抽格行為 —— 否則
-            # 「關掉外包」會變成「影片完全隱形」，那不是任何人想要的。
-            note = await media.describe_video(bot, picked, cfg, llm)
+        if media.is_motion(picked):
+            # **影片與動圖一律外包，不在這裡抽格。** 主模型只看得懂靜態圖，
+            # 而抽一格看不出連續動作，卻會讓它以為自己看過、講出半真半假的
+            # 描述。外包成功就用解說，失敗就當作沒有這個媒體，並講出原因。
+            note = await media.describe_video(bot, picked, cfg, llm, db=db)
             if note is not None and note.text:
                 if target is message:
                     own_note = note
@@ -101,14 +102,14 @@ async def collect(
         # 實測後者會被當成中繼資料略過 —— 助理照樣答「我淨係知有張動圖」，
         # 而描述其實就在同一個 prompt 裡。
         hint = (
-            f"{media.describe(message, frames=None)}\n"
+            f"{media.describe(message)}\n"
             f"〔系統給你的影片內容描述：{own_note.text}〕"
         )
     elif own_skip:
         # 刻意沒看就講出來 —— 否則對方會以為已經被看過了。
-        hint = f"{media.describe(message, frames=None)}\n〔{own_skip}〕"
+        hint = f"{media.describe(message)}\n〔{own_skip}〕"
     elif own_count:
-        hint = media.describe(message, frames=own_count)
+        hint = media.describe(message)
     if hint:
         text = f"{text}\n{hint}".strip() if text else hint
 

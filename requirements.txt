@@ -3,7 +3,5 @@ httpx>=0.27,<1
 aiosqlite>=0.20,<1
 pydantic-settings>=2.5,<3
 Pillow>=10,<13
-# 影片抽格用。自帶 ffmpeg 執行檔，VPS 上不必另外裝系統套件。
-# 沒裝也能跑 —— media.ffmpeg_exe() 找不到時退回 PATH 上的 ffmpeg，
-# 兩者都沒有就只送影片的第一格縮圖。
-imageio-ffmpeg>=0.5,<1
+# 注意：沒有 ffmpeg。影片與動圖不再抽格 —— 一律外包給吃得了影片的模型
+# （見 media.describe_video），所以不需要在本機解碼影片。

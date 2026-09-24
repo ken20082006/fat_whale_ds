@@ -198,7 +198,12 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # include_reply=False：被引用的那一則由下面的引用串統一處理，避免重複下載
     text, own_images = await collect(
-        message, context.bot, svc.cfg, include_reply=False, llm=svc.llm
+        message,
+        context.bot,
+        svc.cfg,
+        include_reply=False,
+        llm=svc.llm,
+        db=svc.db,
     )
     if text is None and not own_images:
         return
@@ -244,6 +249,7 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         svc.llm,
         skip={message.message_id},
         limit=svc.cfg.video_delegate_chain_limit,
+        db=svc.db,
     )
     if chain_notes:
         body = "\n".join(f"【{who}】{text}" for who, text in chain_notes)
@@ -399,10 +405,9 @@ async def _gather_chain_media(
         file_id = item.get("media_file_id")
         if not file_id or item.get("message_id") in skip:
             continue
-        # **動態素材不在這裡處理。** 快取存的是縮圖，抽一格的縮圖看不出
-        # 連續動作，卻會讓模型以為自己看過。那條路走 _gather_chain_notes()。
-        # 外包關掉時才回到舊行為（抽縮圖），否則影片會完全隱形。
-        if cfg.video_delegate_enabled and media.is_motion_source(source):
+        # **動態素材不在這裡處理。** 快取存的是縮圖，而縮圖看不出連續動作。
+        # 那條路走 _gather_chain_notes()，一律外包。
+        if media.is_motion_source(source):
             continue
         candidates.append((file_id, source))
 
@@ -427,6 +432,7 @@ async def _gather_chain_notes(
     *,
     skip: set[int],
     limit: int,
+    db=None,
 ) -> list[tuple[str, str]]:
     """把引用串裡的動態素材外包給看得了片的模型，回傳 (說話者, 解說)。
 
@@ -436,7 +442,7 @@ async def _gather_chain_notes(
 
     limit 是「一輪最多外包幾條」。每條最貴約兩仙美元，所以預設只做最近一條。
     """
-    if llm is None or limit <= 0 or not cfg.video_delegate_enabled:
+    if llm is None or limit <= 0:
         return []
 
     notes: list[tuple[str, str]] = []
@@ -457,7 +463,7 @@ async def _gather_chain_notes(
             clip_bytes=item.get("clip_bytes"),
             clip_seconds=item.get("clip_seconds"),
         )
-        note = await media.describe_video(bot, picked, cfg, llm)
+        note = await media.describe_video(bot, picked, cfg, llm, db=db)
         if note is not None and note.text:
             notes.append((item.get("display_name") or "某人", note.text))
 
