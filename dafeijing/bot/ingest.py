@@ -21,16 +21,21 @@ async def collect(
     cfg,
     *,
     include_reply: bool = True,
+    llm=None,
 ) -> tuple[str | None, list[PreparedImage]]:
     """回傳 (文字, 圖片列表)。不支援的訊息型態回傳 (None, [])。
 
     include_reply 控制要不要一併處理被引用的那一則的媒體。
     群組路徑會傳 False —— 那裡由引用串快取負責，已經涵蓋整條串，
     在這裡重複抓會多下載一次同一張圖。
+
+    llm 有值時，動態素材會先外包給吃得了影片的模型拿一段解說
+    （見 media.describe_video）。外包失敗就照舊抽格。
     """
     images: list[PreparedImage] = []
     # 主要這一則自己貢獻了幾張。標註要寫對格數，所以得和引用的那一則分開算。
     own_count = 0
+    own_note: media.VideoNote | None = None
 
     targets = [message]
     if include_reply and message.reply_to_message is not None:
@@ -55,6 +60,17 @@ async def collect(
                 return None, []
             continue
 
+        # 動態素材先試外包：它看得出連續動作、節奏與字幕變化，抽格做不到。
+        note = None
+        if media.is_motion(picked):
+            note = await media.describe_video(bot, picked, cfg, llm)
+
+        if note is not None:
+            # 外包成功就**不再送圖** —— 解說已經涵蓋畫面內容，而且更省 token。
+            if target is message:
+                own_note = note
+            continue
+
         try:
             collected = await media.collect_media(bot, picked, cfg)
         except MediaError as exc:
@@ -72,8 +88,13 @@ async def collect(
 
     # 標註只寫主要的這一則。被引用的那一則在引用串裡有自己的紀錄，
     # 而且它的媒體型態與這一則無關 —— 拿這一則去 describe 會寫出「〔檔案〕」。
-    if own_count:
+    hint = ""
+    if own_note is not None:
+        # frames=None：外包那條路沒有「幾格畫面」這回事，寫格數會是錯的。
+        hint = f"{media.describe(message, frames=None)}\n〔內容：{own_note.text}〕"
+    elif own_count:
         hint = media.describe(message, frames=own_count)
+    if hint:
         text = f"{text}\n{hint}".strip() if text else hint
 
     if not text and not images:

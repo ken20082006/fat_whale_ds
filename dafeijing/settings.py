@@ -191,6 +191,29 @@ class Settings(BaseSettings):
     # 讀少一格，總比讓使用者等半分鐘好。
     media_max_seconds: float = 180.0
 
+    # ── 外包看片 ──────────────────────────────────────────
+    # 抽格只看得到幾個瞬間。有些模型直接吃得了整段影片，把片丟給它看完再
+    # 拿一段文字回來，看得出連續動作、節奏、字幕變化。見 media.describe_video。
+    video_delegate_enabled: bool = True
+    video_delegate_model: str = "google/gemini-3.5-flash-lite"
+
+    # **影片輸入按秒計費**：Gemini 預設每秒抽一格、每格約 260 token，所以
+    # 60 秒約 15,600 token ≈ $0.0047（flash-lite $0.30/M）。抽格那條路只花
+    # 約 3 張圖 ≈ 3,000 token ≈ $0.0004 —— 外包貴十幾倍。
+    #
+    # 所以長度上限就是成本槓桿：60 秒的最壞情況是半仙美元，而一般 GIF
+    # 只花約 $0.0008。更長的就退回抽格（讀少幾格，總比不讀好）。
+    video_delegate_max_seconds: float = 60.0
+
+    # 大小上限跟 token 無關，是為了請求本身：base64 會脹約三分之一，
+    # 10MB 的片變成約 13MB 的 JSON，而 Gemini 的 inline 上限是 20MB ——
+    # 留一點餘量給 prompt 與編碼開銷。超過就退回抽格。
+    video_delegate_max_bytes: int = 10 * 1024 * 1024
+
+    # 解說的長度。它會落庫（成為對話紀錄的一部分），所以要有界。
+    video_delegate_max_tokens: int = 400
+    video_delegate_max_chars: int = 300
+
     @property
     def admin_ids(self) -> set[int]:
         out: set[int] = set()

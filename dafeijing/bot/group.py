@@ -196,7 +196,9 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # include_reply=False：被引用的那一則由下面的引用串統一處理，避免重複下載
-    text, own_images = await collect(message, context.bot, svc.cfg, include_reply=False)
+    text, own_images = await collect(
+        message, context.bot, svc.cfg, include_reply=False, llm=svc.llm
+    )
     if text is None and not own_images:
         return
 

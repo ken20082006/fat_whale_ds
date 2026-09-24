@@ -431,3 +431,79 @@ def test_size_cap_is_not_enforced_when_unset():
         )
     )
     assert prepared.width == 4
+
+
+# ── 外包看片 ────────────────────────────────────────────
+#
+# 抽格只看得到幾個瞬間。有些模型直接吃得了整段影片，所以把片丟給它看完、
+# 拿一段文字回來。下面守住「哪種媒體值得外包」與「mime 判斷」。
+
+
+def test_is_motion_covers_the_three_dynamic_sources():
+    """影片、圓形影片、動圖（GIF 或無聲 MP4）都值得外包。"""
+    for source in ("video", "video_note", "animation"):
+        assert media.is_motion(Picked("f", source)), source
+
+    # 靜態的不必外包 —— 它本來就是一張圖
+    for source in ("photo", "sticker"):
+        assert not media.is_motion(Picked("f", source)), source
+
+
+def test_sniff_mime_tells_gif_from_mp4():
+    """data URL 的 mime 不能猜錯，模型會照它解碼。
+
+    Telegram 的「動圖」可能是 GIF 也可能是被轉過的 MP4，所以看來源不準，
+    要看檔頭。
+    """
+    assert media.sniff_mime(b"GIF89a" + b"\x00" * 32) == "image/gif"
+    assert media.sniff_mime(b"GIF87a" + b"\x00" * 32) == "image/gif"
+
+    # EBML 檔頭 = webm / mkv
+    assert media.sniff_mime(b"\x1a\x45\xdf\xa3" + b"\x00" * 32) == "video/webm"
+
+    # 其餘（含一般 MP4 的 ftyp box）一律當 mp4
+    assert media.sniff_mime(b"\x00\x00\x00\x20ftypisom") == "video/mp4"
+    assert media.sniff_mime(b"") == "video/mp4"
+
+
+class _DelegateCfg:
+    video_delegate_enabled = True
+    video_delegate_max_bytes = 1024
+    video_delegate_max_seconds = 60.0
+    video_delegate_model = "test/model"
+    video_delegate_max_tokens = 100
+    video_delegate_max_chars = 300
+
+
+def test_describe_video_is_skipped_without_an_llm():
+    """沒有 llm 時直接跳過，呼叫端不該多付一次呼叫。"""
+    picked = Picked("f", "video", clip_file_id="c", clip_seconds=5.0)
+    assert asyncio.run(media.describe_video(None, picked, _DelegateCfg(), None)) is None
+
+
+
+def test_describe_video_is_skipped_when_disabled():
+    cfg = _DelegateCfg()
+    cfg.video_delegate_enabled = False
+    picked = Picked("f", "video", clip_file_id="c", clip_seconds=5.0)
+    assert asyncio.run(media.describe_video(None, picked, cfg, object())) is None
+
+
+def test_describe_video_gives_up_on_oversize_or_overlong_clips():
+    """外包是加分項，不是必要路徑 —— 太大或太長就安靜地退回抽格。
+
+    影片輸入按秒計費，比抽格貴十幾倍，所以長度上限就是成本槓桿。
+    """
+    # 宣告大小就超標 → 連下載都不必
+    too_big = Picked("f", "video", clip_file_id="c", clip_bytes=4096, clip_seconds=5.0)
+    assert (
+        asyncio.run(media.describe_video(None, too_big, _DelegateCfg(), object()))
+        is None
+    )
+
+    # 太長 → 同理
+    too_long = Picked("f", "video", clip_file_id="c", clip_bytes=512, clip_seconds=600.0)
+    assert (
+        asyncio.run(media.describe_video(None, too_long, _DelegateCfg(), object()))
+        is None
+    )

@@ -1,7 +1,11 @@
 """把 Telegram 的媒體轉成模型看得懂的格式。
 
-模型收不下影片與動態貼圖本身，所以一律換成「一格畫面」送進去。能取幾格
+主模型收不下影片與動態貼圖本身，所以換成「幾格畫面」送進去。能取幾格
 取決於來源：動畫 GIF 由 Pillow 逐格解，影片由 ffmpeg 抽格，其餘只有一張。
+
+**但抽格只看得到幾個瞬間** —— 連續動作、節奏、字幕變化都看不到。所以
+另外有一條路：把整段影片外包給吃得了影片的模型，拿一段文字解說回來
+（見 `describe_video`）。外包成功就不必再送圖。
 
 圖片一律轉成 JPEG 並縮到長邊上限 —— 原圖可能很大，而 token 成本隨尺寸上升，
 縮圖對辨識力的損失微乎其微。
@@ -22,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
+
+from .util import truncate
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +77,119 @@ class Picked:
 
 class MediaError(RuntimeError):
     """圖片無法處理。訊息可安全顯示給使用者。"""
+
+
+# ── 外包看片 ────────────────────────────────────────────
+
+# 抽格只看得到幾個瞬間：做什麼大致看得出，但連續動作、節奏、字幕變化看不到。
+# 有些模型直接吃得了整段影片，所以把片丟給它看完，拿一段文字回來 ——
+# 之後就當成自己看過的。呼叫端不需要知道這件事。
+_DELEGATE_PROMPT = (
+    "用一段文字講清楚這段影片在做什麼，講給一個沒看過的人聽。"
+    "涵蓋：畫面內容、發生什麼事、出現的人物或物件、有無文字或字幕、整體氣氛。"
+    "只描述你真正看到的，不確定就不要講。控制在四句以內，不要前言。"
+)
+
+# data URL 的 mime 不能猜錯，模型會照它解碼。用magic bytes 判，比看來源可靠 ——
+# Telegram 的「動圖」可能是 GIF 也可能是被轉過的 MP4。
+_GIF_MAGIC = (b"GIF87a", b"GIF89a")
+_WEBM_MAGIC = b"\x1a\x45\xdf\xa3"  # EBML，webm / mkv
+
+
+@dataclass(frozen=True)
+class VideoNote:
+    """外援模型看完一段動態素材之後的解說。"""
+
+    text: str
+    cost: float = 0.0
+    model: str = ""
+
+
+def is_motion(picked: "Picked") -> bool:
+    """這個媒體是不是「一段影片」—— 值得外包去看。"""
+    return picked.source in ("video", "video_note", "animation")
+
+
+def sniff_mime(blob: bytes) -> str:
+    """從檔頭判斷 mime。"""
+    if blob[:6] in _GIF_MAGIC:
+        return "image/gif"
+    if blob[:4] == _WEBM_MAGIC:
+        return "video/webm"
+    return "video/mp4"
+
+
+async def describe_video(bot, picked: "Picked", cfg, llm) -> VideoNote | None:
+    """把整段動態素材交給外援模型看，拿回一段解說。
+
+    **失敗一律回 None**，由呼叫端退回抽格 —— 外包是加分項，不是必要路徑。
+    所以這裡連例外都不往外丟：外包掛掉不該讓整則訊息讀不到。
+
+    llm 為 None（或未開啟）時直接跳過，呼叫端就不會多付一次呼叫。
+    """
+    if llm is None or not cfg.video_delegate_enabled:
+        return None
+
+    # 有本體就用本體；真 GIF 沒有 clip_*，它的 file_id 本身就是 GIF 本體。
+    file_id = picked.clip_file_id or picked.file_id
+    declared = picked.clip_bytes if picked.clip_file_id else picked.declared_bytes
+    limit = cfg.video_delegate_max_bytes
+
+    if declared is not None and declared > limit:
+        logger.info("影片過大，不做外包解說：%d bytes", declared)
+        return None
+    # 影片輸入按秒計費，比抽格貴得多。
+    if picked.clip_seconds and picked.clip_seconds > cfg.video_delegate_max_seconds:
+        logger.info("影片過長，不做外包解說：%.0f 秒", picked.clip_seconds)
+        return None
+
+    try:
+        blob = await _download(bot, file_id, max_bytes=limit)
+    except MediaError as exc:
+        logger.info("影片本體取不到，退回抽格：%s", exc)
+        return None
+
+    data_url = f"data:{sniff_mime(blob)};base64,{base64.b64encode(blob).decode()}"
+
+    try:
+        result = await llm.chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _DELEGATE_PROMPT},
+                        {"type": "video_url", "video_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            model=cfg.video_delegate_model,
+            max_tokens=cfg.video_delegate_max_tokens,
+            # **刻意不傳 reasoning=False。** 這個端點要求一定要推理，傳
+            # `{"enabled": false}` 會回 400：「Reasoning is mandatory for this
+            # endpoint and cannot be disabled.」不同模型的要求不一樣，所以
+            # 這裡交給端點自己決定 —— 傳錯只會白白失敗一次。
+        )
+    except Exception:
+        # 外包用什麼模型、回來什麼形狀都不關這裡的事 —— 任何失敗都等於
+        # 「這次沒外包成」，退回抽格就好。
+        logger.exception("外包看片失敗，退回抽格")
+        return None
+
+    text = (result.text or "").strip()
+    if not text:
+        return None
+
+    logger.info(
+        "外包看片：%s → %d 字（$%.6f）",
+        picked.source,
+        len(text),
+        result.cost,
+    )
+    return VideoNote(
+        text=truncate(text, cfg.video_delegate_max_chars),
+        cost=result.cost,
+        model=result.model,
+    )
 
 
 # 過大的檔案另外給一句話。「拿不到檔案、可能是網路不穩」對一個太大的檔案
