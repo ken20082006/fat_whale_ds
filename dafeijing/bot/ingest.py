@@ -97,8 +97,13 @@ async def collect(
     # 而且它的媒體型態與這一則無關 —— 拿這一則去 describe 會寫出「〔檔案〕」。
     hint = ""
     if own_note is not None:
-        # frames=None：外包那條路沒有「幾格畫面」這回事，寫格數會是錯的。
-        hint = f"{media.describe(message, frames=None)}\n〔內容：{own_note.text}〕"
+        # 明講這是「系統給你的內容描述」，不要只寫〔內容：…〕。
+        # 實測後者會被當成中繼資料略過 —— 助理照樣答「我淨係知有張動圖」，
+        # 而描述其實就在同一個 prompt 裡。
+        hint = (
+            f"{media.describe(message, frames=None)}\n"
+            f"〔系統給你的影片內容描述：{own_note.text}〕"
+        )
     elif own_skip:
         # 刻意沒看就講出來 —— 否則對方會以為已經被看過了。
         hint = f"{media.describe(message, frames=None)}\n〔{own_skip}〕"
