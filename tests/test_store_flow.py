@@ -301,7 +301,12 @@ def test_group_reply_chain_resolution():
 
 
 def _fake_group_message(**overrides):
-    """模擬 telegram.Message 的最小形狀。"""
+    """模擬 telegram.Message 的最小形狀。
+
+    媒體欄位要全部列出，即使值是 None —— 真實的 telegram.Message 一律帶齊
+    這些屬性（沒有就 None），pick_file() 也會逐個直接讀取。
+    少寫一個就會 AttributeError，而那不是生產程式的問題，是這個假物件不夠真。
+    """
     base = dict(
         chat=SimpleNamespace(id=-100),
         chat_id=-100,
@@ -311,6 +316,9 @@ def _fake_group_message(**overrides):
         text=None,
         caption=None,
         sticker=None,
+        animation=None,
+        video=None,
+        video_note=None,
         photo=None,
         document=None,
     )
@@ -363,6 +371,7 @@ def test_cache_from_update_extracts_sticker_file_id():
                 is_video=False,
                 emoji="😭",
                 file_id="sticker-1",
+                file_size=None,
                 thumbnail=None,
             )
             await chain.cache_from_update(_fake_group_message(sticker=sticker))
