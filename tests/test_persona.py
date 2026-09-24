@@ -57,6 +57,26 @@ def test_capability_block_always_denies_execution():
         assert "不能執行程式" in prompt
 
 
+def test_search_marker_is_only_advertised_when_no_search_is_running():
+    """只有在這一則還沒有搜尋時，才告訴模型它可以自己要求搜尋。
+
+    真實事故：問「今日恆指幾多」，判斷已經開了搜尋，但 persona 仍然叫模型
+    「只回覆 [[搜尋:...]]，不要寫其他內容」。模型照做 —— 那個標記就是它的
+    全部輸出，清掉之後變成空白，使用者收到一句沒頭沒腦的錯誤訊息。
+    """
+    advertising = Persona("角色").build(
+        PersonaContext(can_search=True, self_search=True)
+    )
+    assert "[[搜尋:" in advertising
+
+    quiet = Persona("角色").build(
+        PersonaContext(can_search=True, self_search=False)
+    )
+    assert "[[搜尋:" not in quiet
+    # 但「我查得到」仍然要講 —— 不然模型會說自己上唔到網
+    assert "能聯網搜尋" in quiet
+
+
 def test_security_rule_does_not_deny_network_access():
     """安全界線不能斷言「沒有網路能力」—— 那會與實際功能矛盾。"""
     prompt = Persona("角色").build(PersonaContext(can_search=True))

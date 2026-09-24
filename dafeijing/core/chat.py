@@ -214,7 +214,12 @@ class ChatService:
                 group_profile=group_profile,
                 can_search=self._cfg.search_mode != "off",
                 can_fetch=self._cfg.fetch_max_urls > 0,
-                self_search=self._cfg.search_mode not in ("off", "always"),
+                # 只有「這一則還沒有搜尋」時才告訴模型它可以自己要求搜尋。
+                # 否則它會照著那段指示「只回覆 [[搜尋:...]]，不要寫其他內容」，
+                # 而搜尋其實已經做過了 —— 標記被清掉之後整則回覆變成空白。
+                self_search=(
+                    not search and self._cfg.search_mode not in ("off", "always")
+                ),
             )
         )
 
@@ -287,29 +292,35 @@ class ChatService:
             messages, max_tokens=max_tokens, reasoning=reasoning, web_search=search
         )
 
-        # 模型自己決定要查：第一次它只回了一行標記，這裡帶著外掛重跑一次。
+        # 模型自己要求搜尋：它只回了一行標記時，帶著外掛重跑一次。
         # 這是唯一能讓模型自決的方法 —— web 外掛沒有「讓模型啟用自己」的介面。
-        if not search and mode != "off":
-            _, query = extract_search_marker(result.text)
-            if query:
-                logger.info("模型自行要求搜尋：%s", query)
-                self.web_searches += 1
-                search = True
-                result = await self._llm.chat(
-                    [
-                        *messages,
-                        {
-                            "role": "user",
-                            "content": (
-                                f"（先上網查「{query}」，再用查到的內容回答我上一則問題。"
-                                f"這次不要再輸出標記。）"
-                            ),
-                        },
-                    ],
-                    max_tokens=max_tokens,
-                    reasoning=reasoning,
-                    web_search=True,
-                )
+        #
+        # 這裡**不是**「只有在搜尋還沒開時才處理」。模型即使已經拿到搜尋結果，
+        # 仍可能再要求查一次（persona 有教它這個標記）。而那段指示寫明
+        # 「只回覆這一行，不要寫其他內容」—— 標記往往就是它的全部輸出，
+        # 清掉之後變成空白，使用者只收到一句沒頭沒腦的錯誤訊息。
+        # 真實案例：問「今日恆指幾多」，判斷已開搜尋，模型仍只回了標記，
+        # 輸出 24 個 token，清完是空的。
+        stripped, query = extract_search_marker(result.text)
+        if query and mode != "off" and (not search or not stripped.strip()):
+            logger.info("模型要求搜尋：%s", query)
+            self.web_searches += 1
+            search = True
+            result = await self._llm.chat(
+                [
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": (
+                            f"（先上網查「{query}」，再用查到的內容回答我上一則問題。"
+                            f"這次不要再輸出標記。）"
+                        ),
+                    },
+                ],
+                max_tokens=max_tokens,
+                reasoning=reasoning,
+                web_search=True,
+            )
 
         # 先把標記拿掉 —— 那是給系統看的，不能留在訊息裡。
         # 模型有可能在第二次仍然輸出搜尋標記，所以兩種都清。
@@ -319,7 +330,16 @@ class ChatService:
         # 提示裡雖然已經叫它不要標，模型不一定每次都聽，所以在輸出端再清一次。
         result.text = strip_citations(result.text)
 
-        result.text = result.text or "本鯨查完之後不知道該說什麼，再問一次好嗎。"
+        if not result.text:
+            # 走到這裡還是空白。最常見的原因是模型只輸出了一個搜尋標記，
+            # 清掉之後就沒了 —— 那句話原本寫「查完不知道該說什麼」，但它
+            # 其實什麼都沒說，使用者只會一頭霧水。講明白，也留下痕跡好追。
+            logger.warning(
+                "模型回覆清理後是空白（finish_reason=%s、輸出 %d token）",
+                result.finish_reason,
+                result.completion_tokens,
+            )
+            result.text = "本鯨這次卡住了，再問一次好嗎。"
         cleaned, sticker_index = extract_marker(result.text)
         result.text = cleaned
 
