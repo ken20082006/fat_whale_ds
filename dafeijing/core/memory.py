@@ -136,11 +136,19 @@ _CONSOLIDATE = """\
 """
 
 
+_MEMORY_GATE_INSTRUCTIONS = (
+    "判斷這段對話裡有沒有關於這位使用者本人、值得長期記住的事實。"
+    "值得記的：身分與背景、長期偏好、持續進行的事、明確要求記住的事。"
+    "不值得記的：一次性的問題、當下情緒、閒聊、問答本身、助理說過的話。"
+)
+
+
 class MemoryExtractor:
-    def __init__(self, cfg, sessions: SessionManager, llm) -> None:
+    def __init__(self, cfg, sessions: SessionManager, llm, decisions) -> None:
         self._cfg = cfg
         self._sessions = sessions
         self._llm = llm
+        self._decisions = decisions
         self._tasks: set[asyncio.Task] = set()
 
     # ── 排程 ────────────────────────────────────────────
@@ -174,6 +182,28 @@ class MemoryExtractor:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
+    async def _worth_remembering(self, user_text: str, assistant_text: str) -> bool:
+        """值不值得花一次抽取呼叫 —— 先問 Jev。
+
+        抽取本來就在背景跑，所以這個閘省的不是延遲，而是那次 utility 模型呼叫。
+
+        **判斷不可用時一律回 True。** 漏記一則正確的事實，比多花一次便宜呼叫
+        嚴重得多 —— 這個閘只可以在有把握時才收窄，所以門檻刻意設得低。
+        """
+        if not self._cfg.decision_enabled or not self._cfg.auto_memory:
+            return True
+
+        decision = await self._decisions.noul(
+            f"使用者說：{user_text}\n助理回：{assistant_text}",
+            _MEMORY_GATE_INSTRUCTIONS,
+        )
+        if decision is None:
+            return True
+
+        keep = decision.value >= self._cfg.memory_decision_threshold
+        logger.debug("記憶閘：%.2f → %s", decision.value, "記" if keep else "跳過")
+        return keep
+
     # ── 抽取 ────────────────────────────────────────────
 
     async def _run(
@@ -185,6 +215,10 @@ class MemoryExtractor:
         people: list[Person] | None,
     ) -> None:
         try:
+            if not await self._worth_remembering(user_text, assistant_text):
+                logger.debug("判斷不值得記，跳過抽取（%s）", scope)
+                return
+
             if people:
                 facts = await self._extract_group(scope, user_text, assistant_text, people)
             else:

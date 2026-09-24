@@ -17,6 +17,7 @@ from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
+from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
@@ -32,6 +33,7 @@ class Services:
     persona: Persona
     llm: OpenRouterClient
     usage: UsageLog
+    decisions: DecisionsClient
     chat: ChatService
     debouncer: Debouncer
     limiter: RateLimiter

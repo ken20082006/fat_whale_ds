@@ -8,6 +8,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from ..llm.decisions import (
+    Assessment,
+    DecisionsClient,
+    budget_factor,
+    resolve_reasoning,
+    route_flags,
+    tone_vibe,
+)
 from ..llm.openrouter import LLMResult, OpenRouterClient
 from .access import AccessControl
 from .media import PreparedImage
@@ -31,6 +39,15 @@ logger = logging.getLogger(__name__)
 # 一次最多帶幾個人的筆記進提示。帶太多會讓 system prompt 暴漲，
 # 而且「一次問三個人的事」本來就少見。
 MAX_MENTIONED_NOTES = 3
+
+# /vibe 的等級順序。tone_vibe() 只會沿這個順序往下調，不會往上推 ——
+# 使用者的選擇是上限，逐則判斷只可以把演出收窄。
+VIBE_ORDER = ("low", "mid", "high")
+
+
+def _fmt_score(value: float | None) -> str:
+    """日誌用。沒判斷到就寫 —，不要寫 None。"""
+    return "—" if value is None else f"{value:.2f}"
 
 
 @dataclass
@@ -71,6 +88,7 @@ class ChatService:
         usage: UsageLog,
         memory: MemoryExtractor,
         stickers: StickerLibrary,
+        decisions: DecisionsClient,
     ) -> None:
         self._cfg = cfg
         self._persona = persona
@@ -80,19 +98,82 @@ class ChatService:
         self._usage = usage
         self._memory = memory
         self._stickers = stickers
+        self._decisions = decisions
         self.blocked_leaks = 0
         self.web_searches = 0
         self.fetched_pages = 0
+
+    async def _assess(self, text: str) -> Assessment | None:
+        """一次問齊：怎麼處理、要幾深、幾放開。
+
+        只餵「對方自己這一句」。群組的引用串是別人講的話，拿它來判斷
+        等於替整個群組查、替別人講過的話查。
+        """
+        if not text.strip():
+            return None
+        return await self._decisions.assess(text)
+
+    def _pick_reasoning(self, user, route: str | None) -> bool:
+        """個人指定 > 路由判斷 > 全域後備。"""
+        personal = user["reasoning"] if user is not None else None
+        indicated, _search = route_flags(route)
+        return resolve_reasoning(
+            personal, indicated, fallback=self._cfg.reasoning_enabled
+        )
+
+    def _pick_search(self, req: ChatRequest, route: str | None) -> bool:
+        """搜尋：模式決定誰說了算。
+
+        `off` 完全不搜；`always` 與 `/search`（force_search）是明確要求，
+        不受判斷影響；其餘（`auto` / `trigger`）交給判斷。
+
+        regex 在這裡只可以做**後備**、不可以做否決 —— 判斷失手時仍然捉得到
+        明講的「上網查」。反過來讓 regex 能否決判斷，就會退化回舊行為。
+        """
+        mode = self._cfg.search_mode
+        if mode == "off":
+            return False
+        if req.force_search or mode == "always":
+            return True
+        _reason, by_route = route_flags(route)
+        return bool(by_route) or wants_search(req.text or "", mode)
 
     async def respond(self, req: ChatRequest) -> ChatOutcome:
         user = await self._access.get_user(req.tg_user_id)
         vibe = (user["vibe"] if user else None) or "mid"
 
-        # 推理 token 以輸出計價。預設關閉，由使用者用 /think 個別覆寫。
-        if user is not None and user["reasoning"] is not None:
-            reasoning = bool(user["reasoning"])
-        else:
-            reasoning = self._cfg.reasoning_enabled
+        # 判斷只看「對方自己這一句」。
+        #
+        # 群組的 base_text 是整條引用串，若拿它來判斷，串裡任何一個人提到
+        # 「最新」或「版本」都會觸發 —— 等於替整個群組查，而且是替別人講過
+        # 的話查。判斷依據必須是當下這一句。
+        trigger_text = req.text or ""
+
+        # 一個呼叫同時問齊三件事，取代舊的 regex 搜尋閘與「讓主模型自己
+        # 決定」的標記重跑。那兩個閘為什麼失效，見 TODO.md。
+        assessment = await self._assess(trigger_text)
+        route = assessment.route if assessment else None
+
+        reasoning = self._pick_reasoning(user, route)
+        search = self._pick_search(req, route)
+
+        # 逐則把演出收窄（只降不升）。人設原本就寫「對方情緒低落時收起
+        # 角色扮演」，這裡把那條規則做成明確信號，不必靠主模型自己察覺。
+        if assessment and assessment.tone is not None:
+            vibe = tone_vibe(assessment.tone, vibe, VIBE_ORDER)
+
+        if assessment:
+            logger.info(
+                "判斷 route=%s depth=%s tone=%s → 推理%s、搜尋%s（%s）",
+                route,
+                _fmt_score(assessment.depth),
+                _fmt_score(assessment.tone),
+                "開" if reasoning else "關",
+                "開" if search else "關",
+                trigger_text[:20].replace("\n", " "),
+            )
+        if search:
+            self.web_searches += 1
 
         # 長期筆記依場合分開：私聊獨立，每個群組也各自獨立。見 scope_for 的說明。
         scope = scope_for(req.is_group, req.chat_id)
@@ -128,7 +209,6 @@ class ChatService:
         )
 
         base_text = req.chain_text or req.text
-        trigger_text = req.text or ""
 
         # 連結連同被引用的那一則一起看 ——「引用一條連結再 @ 它」是常見用法。
         url_source = trigger_text
@@ -145,15 +225,7 @@ class ChatService:
                 page_blocks = [page.as_block() for page in pages]
                 self.fetched_pages += len(pages)
 
-        # 搜尋意圖只看「對方自己這一句」。
-        #
-        # 群組的 base_text 是整條引用串，若拿它來判斷，串裡任何一個人提到
-        # 「最新」或「版本」都會觸發搜尋 —— 等於替整個群組查，而且是替
-        # 別人講過的話查。判斷依據必須是當下這一句。
         mode = self._cfg.search_mode
-        search = wants_search(trigger_text, mode) or (req.force_search and mode != "off")
-        if search:
-            self.web_searches += 1
 
         # 送出去的用整條引用串；存進歷史的只用「對方自己那一句」。
         #
@@ -189,6 +261,17 @@ class ChatService:
         max_tokens = (
             self._cfg.group_reply_max_tokens if req.is_group else self._cfg.private_reply_max_tokens
         )
+        if reasoning:
+            # 推理 token 會**吃掉**這個額度，用完 content 會變 null（使用者收到
+            # 「本鯨想得太久，額度用完了」）。判斷說要思考得越深，就多留一點。
+            max_tokens = int(
+                max_tokens
+                * budget_factor(
+                    assessment.depth if assessment else None,
+                    self._cfg.reasoning_budget_low,
+                    self._cfg.reasoning_budget_high,
+                )
+            )
 
         result = await self._llm.chat(
             messages, max_tokens=max_tokens, reasoning=reasoning, web_search=search

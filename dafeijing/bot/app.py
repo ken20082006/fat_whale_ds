@@ -26,6 +26,7 @@ from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
+from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
@@ -45,7 +46,8 @@ def create_services(cfg: Settings) -> Services:
     persona = Persona.load(cfg.persona_file)
     llm = OpenRouterClient(cfg)
     usage = UsageLog(db)
-    memory = MemoryExtractor(cfg, sessions, llm)
+    decisions = DecisionsClient(cfg)
+    memory = MemoryExtractor(cfg, sessions, llm, decisions)
     stickers = StickerLibrary(cfg)
 
     return Services(
@@ -57,7 +59,10 @@ def create_services(cfg: Settings) -> Services:
         persona=persona,
         llm=llm,
         usage=usage,
-        chat=ChatService(cfg, persona, sessions, access, llm, usage, memory, stickers),
+        decisions=decisions,
+        chat=ChatService(
+            cfg, persona, sessions, access, llm, usage, memory, stickers, decisions
+        ),
         memory=memory,
         stickers=stickers,
         debouncer=Debouncer(cfg.debounce_seconds),
@@ -207,6 +212,7 @@ async def _post_shutdown(application: Application) -> None:
     await svc.debouncer.drain()
     await svc.memory.drain()  # 讓還在跑的記憶抽取寫完，免得白花一次呼叫
     await svc.llm.close()
+    await svc.decisions.close()
     await svc.db.close()
 
 

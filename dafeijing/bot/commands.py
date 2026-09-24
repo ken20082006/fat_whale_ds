@@ -45,7 +45,7 @@ async def _scope_label(svc: Services, scope: str) -> str:
 
 def _reasoning_label(value: int | None) -> str:
     if value is None:
-        return "跟隨預設"
+        return "自動判斷"
     return "開啟" if value else "關閉"
 
 
@@ -297,13 +297,18 @@ async def cmd_think(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     argument = (context.args[0].lower() if context.args else "").strip()
     if argument not in ("on", "off", "auto"):
         current = _reasoning_label(row.get("reasoning"))
-        default = "開啟" if svc.cfg.reasoning_enabled else "關閉"
+        fallback = "開啟" if svc.cfg.reasoning_enabled else "關閉"
+        if svc.cfg.decision_enabled:
+            auto_line = "　auto　由系統逐則判斷，難題才思考（建議）"
+        else:
+            auto_line = "　auto　跟隨全域設定（決策模型已停用）"
         await update.effective_message.reply_text(
-            f"深度思考：{current}（全域預設為{default}）\n\n"
+            f"深度思考：{current}\n\n"
             "用法：/think on | off | auto\n"
-            "　on　　遇到難題再打開，想得久但答得準\n"
-            "　off　 直接回答，快又省（建議）\n"
-            "　auto　恢復跟隨全域設定"
+            "　on　　一律開啟，想得久但答得準\n"
+            "　off　 一律關閉，快又省\n"
+            f"{auto_line}\n\n"
+            f"後備：判斷不出來時（決策模型不可用），auto 一律用「{fallback}」。"
         )
         return
 
