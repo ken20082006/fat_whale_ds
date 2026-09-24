@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     group_chain_max_messages: int = 40
     group_chain_max_tokens: int = 12_000
     group_thread_ttl_minutes: int = 720
+    # 引用鏈只追得到「被指名的那一串」。同桌其他人如果沒有互相引用，
+    # 他們的發言就永遠看不到 —— 甲貼了張咖啡相，乙跟著貼一張問評價，
+    # 兩則沒有串連，助理便答不出「甲也貼過」。這裡補上那個缺口。
+    #
+    # 只取最近的，而且與引用串重疊的會剔除。太多則會讓每一輪的輸入成本上升。
+    group_recent_messages: int = 10
+    group_recent_max_tokens: int = 800
 
     # ── 節流 ──
     debounce_seconds: float = 1.5
@@ -107,7 +114,13 @@ class Settings(BaseSettings):
     group_cache_retention_hours: int = 72
 
     # ── 媒體 ──
-    image_max_edge: int = 1024
+    # 縮圖的長邊上限。只在原圖比它大時才縮，不會放大。
+    #
+    # 1568 而不是 1024：Telegram 給的照片最大通常約 1280 邊，
+    # 設 1024 等於每一張都被縮一次；設 1568 則一般不觸發縮圖，送的是原樣。
+    # 代價是 image token 約為像素數 ÷ 750 —— 1280×960 由約 1 050 升至約 1 640。
+    # 貼圖與影片的縮圖本身就更小，調高這個值幫不到它們（見 media.pick_file）。
+    image_max_edge: int = 1568
     # 單一媒體的下載上限，量的是實際下載的位元組數，不是原始素材的大小 ——
     # 靜態圖片與貼圖縮圖都遠低於這個值。真正受限的是 GIF 本體與要抽格的影片。
     image_max_bytes: int = 8 * 1024 * 1024

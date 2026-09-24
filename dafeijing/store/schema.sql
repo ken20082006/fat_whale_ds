@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS memory_notes (
 );
 CREATE INDEX IF NOT EXISTS idx_notes_user ON memory_notes(user_id, scope);
 
--- 群組訊息短期快取，供回溯引用鏈。逾時自動清除，永不送進模型。
+-- 群組訊息短期快取。逾時自動清除。
+-- 有兩條出路，都只在被指名回應時才走：被指名的那條引用串，以及最近的
+-- group_recent_messages 則。其餘內容永不送進模型。見 core/chain.py。
 -- media_file_id 是必要欄位，不是冗餘：引用串還原時要能把當初那張圖真的抓下來，
 -- 只存「〔圖片〕」這種文字標註的話，事後就沒有東西可下載了。
 CREATE TABLE IF NOT EXISTS group_cache (
