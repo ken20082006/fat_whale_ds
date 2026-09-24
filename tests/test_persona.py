@@ -51,8 +51,11 @@ def test_capability_block_reflects_config():
     without = Persona("角色").build(
         PersonaContext(can_fetch=False, search_policy="off")
     )
-    assert "沒有開啟聯網搜尋" in without
+    assert "這一則沒有去查" in without
+    # 這一則沒查 ≠ 沒有能力。否認能力會與「上一則明明搜過」直接矛盾。
     assert "能聯網搜尋" not in without
+    assert "你有聯網搜尋能力" in without
+    assert "目前沒有開啟聯網搜尋" not in without
 
 
 def test_capability_block_always_denies_execution():
@@ -108,10 +111,16 @@ def test_search_policy_drives_the_capability_text():
     assert "已經自動查過" in forced
     assert "[[搜尋:" not in forced
 
-    # off：沒有搜尋
+    # off：這一則沒查 —— **但不可以否認聯網能力**
     off = Persona("角色").build(PersonaContext(search_policy="off"))
-    assert "沒有開啟聯網搜尋" in off
+    assert "這一則沒有去查" in off
+    assert "你有聯網搜尋能力" in off
     assert "決定權在你" not in off
+    # 舊寫法是「目前沒有開啟聯網搜尋」—— 讀落似「我上唔到網」，而對方
+    # 明明見過佢搜過。實際事故：佢答「我而家冇開聯網搜尋，掃資料做唔到」，
+    # 對方即刻反駁「據我所知你上到網架喎」。
+    # （「上唔到網」等字眼仍然會出現 —— 作為「不要這樣說」的反面例子。）
+    assert "目前沒有開啟聯網搜尋" not in off
 
 
 def test_search_never_narrates_the_lookup():
