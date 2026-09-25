@@ -156,6 +156,18 @@ class Settings(BaseSettings):
     # 就會洗版。純記憶體，重啟歸零。
     maintenance_notice_cooldown_seconds: int = 600
 
+    # ── Router（大肥鯨外殼 + Hermes 腦）──────────────────
+    # 設計見 C:\ds\hermes_ds\ARCHITECTURE.md。
+    #
+    # Router 唔再自己打 OpenRouter，而係將對話交去 Hermes 嘅 API server，
+    # 用 conversation 參數指定「邊一條引用串」。所以金鑰要嘅係 Hermes
+    # 自己生嗰條 API_SERVER_KEY，唔係 OpenRouter key。
+    #
+    # ⚠️ 呢條 key 由 Hermes 生成，寫喺 Hermes 嗰邊嘅 data/.env，
+    # 唔喺呢個 repo。唔好喺 .env 寫兩次同名 key —— 邊條生效係睇實作。
+    hermes_url: str = "http://127.0.0.1:8642"
+    hermes_key: str = ""
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")
