@@ -27,6 +27,7 @@ from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
+from ..core.tuning import Tuning
 from ..core.usage import UsageLog
 from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
@@ -52,6 +53,7 @@ def create_services(cfg: Settings) -> Services:
     memory = MemoryExtractor(cfg, sessions, llm, decisions)
     profiler = GroupProfiler(cfg, sessions, llm)
     stickers = StickerLibrary(cfg)
+    tuning = Tuning(cfg, db)
 
     return Services(
         cfg=cfg,
@@ -78,6 +80,7 @@ def create_services(cfg: Settings) -> Services:
         memory=memory,
         profiler=profiler,
         stickers=stickers,
+        tuning=tuning,
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
@@ -151,6 +154,7 @@ def build_application(svc: Services) -> Application:
         ("block", commands.cmd_block),
         ("unblock", commands.cmd_unblock),
         ("reload_persona", commands.cmd_reload),
+        ("tune", commands.cmd_tune),
     ):
         application.add_handler(CommandHandler(name, handler))
 
@@ -187,6 +191,8 @@ async def _post_init(application: Application) -> None:
     svc: Services = application.bot_data["services"]
     await svc.db.connect()
     await svc.stickers.load(svc.db)
+    # 執行期設定疊在 .env 之上。這裡要在 db 連上之後才可以讀。
+    await svc.tuning.load()
 
     # 啟動時一次網路抖動就會讓整個 bot 起不來，所以重試。
     # get_me 失敗沒有什麼可補救的，但不該因此開不了機。

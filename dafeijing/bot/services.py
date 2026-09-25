@@ -17,6 +17,7 @@ from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
+from ..core.tuning import Tuning
 from ..core.usage import UsageLog
 from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
@@ -42,6 +43,7 @@ class Services:
     memory: MemoryExtractor
     profiler: GroupProfiler
     stickers: StickerLibrary
+    tuning: Tuning
 
     bot_username: str = ""
     bot_id: int = 0

@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 from ..core.access import RedeemStatus
 from ..core.chat import ChatRequest
 from ..core.session import PRIVATE_SCOPE, scope_for
+from ..core.tuning import KNOBS
 from ..core.util import humanise_age, truncate
 from ..llm.openrouter import LLMError
 from .services import Services
@@ -132,6 +133,7 @@ _ADMIN_HELP = (
     "  /cost [天數] — 用量與費用總帳\n"
     "  /stats — 運轉狀態\n"
     "  /reload_persona — 改完人設後重新載入，不必重啟\n"
+    "  /tune — 執行期調搜尋與判斷參數，立即生效且重啟仍在\n"
 )
 
 
@@ -633,6 +635,78 @@ async def cmd_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     await svc.access.set_status(int(context.args[0]), "active")
     await update.effective_message.reply_text("已解除封鎖。")
+
+
+@admin_only
+async def cmd_tune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """執行期調參。改完立即生效，而且寫進資料庫、重啟仍在。
+
+    只開放搜尋與判斷相關的參數 —— 金鑰、路徑、模型代號不開放，
+    那些改錯會令 bot 起不來，還是在 .env 改安全。見 core/tuning.py。
+    """
+    svc = get_services(context)
+    message = update.effective_message
+    args = [a.strip() for a in (context.args or []) if a.strip()]
+    usage = "用法：\n　/tune　　　　　　看目前值\n　/tune set <項> <值>\n　/tune reset <項>\n　/tune reset all"
+
+    if not args:
+        overridden = await svc.tuning.overridden()
+        lines = ["執行期可調參數（★ = 已被 /tune 改過，不是 .env 的值）\n"]
+        for knob in KNOBS:
+            mark = "★" if knob.key in overridden else "　"
+            value = svc.tuning.current(knob)
+            lines.append(f"{mark} {knob.key} = {value if value != '' else '(空)'}")
+            lines.append(f"　　{knob.help}")
+        lines.append("")
+        lines.append(usage)
+        lines.append("例如：/tune set mode always")
+        await message.reply_text("\n".join(lines))
+        return
+
+    action = args[0].lower()
+
+    if action == "set":
+        if len(args) < 3:
+            await message.reply_text(usage)
+            return
+        key = args[1]
+        raw = " ".join(args[2:])
+        try:
+            old, new = await svc.tuning.set(key, raw)
+        except ValueError as exc:
+            await message.reply_text(f"改唔到：{exc}")
+            return
+        await message.reply_text(
+            f"{key}：{old} → {new}\n（已寫入資���庫，重啟之後仍然有效）"
+        )
+        return
+
+    if action == "reset":
+        if len(args) < 2:
+            await message.reply_text(usage)
+            return
+        if args[1].lower() == "all":
+            count = 0
+            for knob in KNOBS:
+                if await svc.tuning.reset(knob.key) is not None:
+                    count += 1
+            await message.reply_text(
+                f"已還原 {count} 項成 .env 的值。" if count else "本來就冇改過任何項。"
+            )
+            return
+        try:
+            changed = await svc.tuning.reset(args[1])
+        except ValueError as exc:
+            await message.reply_text(f"改唔到：{exc}")
+            return
+        if changed is None:
+            await message.reply_text(f"{args[1]} 本來就冇改過，現在用 .env 的值。")
+        else:
+            old, new = changed
+            await message.reply_text(f"{args[1]}：{old} → {new}（.env 的值）")
+        return
+
+    await message.reply_text(usage)
 
 
 @admin_only

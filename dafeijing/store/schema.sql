@@ -140,6 +140,19 @@ CREATE TABLE IF NOT EXISTS usage_log (
 CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage_log(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_log(created_at);
 
+-- 執行期可調參數。管理員在 Telegram 用 /tune 改，改完立即生效並持久化。
+--
+-- 三層：.env 是基底 → 這張表是覆寫 → /tune set 即時改。
+-- /tune reset 刪掉這裡的列，還原成 .env 的值。
+--
+-- 只放搜尋與判斷相關的參數。金鑰、路徑、模型代號不進來 —— 那些改錯會令
+-- bot 起不來，而且在 .env 改才看得出全貌。見 core/tuning.py 的 KNOBS。
+CREATE TABLE IF NOT EXISTS runtime_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- 外包看片的結果，按媒體的**穩定**識別碼（file_unique_id）存。
 --
 -- 為什麼要快取：同一條片再傳，外包模型會給出**唔同**的描述 —— 實測同一條

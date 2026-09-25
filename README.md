@@ -264,7 +264,31 @@ cp config/persona.example.md config/persona.md
 | `/quota` | 查自己的用量 |
 | `/id` | 查自己的 Telegram id |
 
-管理員：`/issue` `/revoke` `/invites` `/allowgroup` `/denygroup` `/groups` `/cost` `/stats` `/block` `/unblock` `/reload_persona`
+管理員：`/issue` `/revoke` `/invites` `/allowgroup` `/denygroup` `/groups` `/cost` `/stats` `/block` `/unblock` `/reload_persona` `/tune`
+
+### `/tune` —— 執行期調參
+
+搜尋與判斷的參數可以在 Telegram 直接改，**立即生效**，而且寫進資料庫、
+重啟之後仍在：
+
+```
+/tune                      看目前值（★ = 已被改過，不是 .env 的值）
+/tune set mode always      搜尋積極程度：off / trigger / auto / always
+/tune set engine parallel  引擎：parallel / exa / perplexity / firecrawl
+/tune set results 7        一般情況撈幾條
+/tune reset mode           還原成 .env 的值
+/tune reset all            全部還原
+```
+
+**三層優先順序**：`.env` 是基底 → 資料庫的覆寫疊在上面 → `/tune set` 即時改。
+`/tune reset` 刪掉覆寫，還原成 `.env` 的值。
+
+打錯字會報錯，不會靜靜接受 —— 無效的設定比沒有設定更難查。
+資料庫裡若有不合法或已不在清單裡的值，啟動時會忽略並記警告，不會令 bot 起不來。
+
+**只開放搜尋與判斷相關的參數。** 金鑰、路徑、模型代號不開放 ——
+那些改錯會令 bot 起不來，而改完要重啟才知道，還是在 `.env` 改安全。
+可調清單在 `core/tuning.py` 的 `KNOBS`，指令說明由那裡推出來，不會脫節。
 
 ---
 
