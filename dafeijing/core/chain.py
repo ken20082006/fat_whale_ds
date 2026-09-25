@@ -173,6 +173,38 @@ class ReplyChain:
         chain.reverse()
         return self._trim(chain)
 
+    async def root_id(self, chat_id: int, leaf_message_id: int) -> int:
+        """回傳這條引用串的**串根 message_id**（永遠唔會回 -1）。
+
+        為什麼唔用 `resolve()`：`resolve()` 會為了餵模型而摺疊中段，
+        摺疊出嚟嘅標記 `message_id` 係 -1。如果串根啱好被摺走，
+        `chain[0]` 就會變成 -1 —— 而 router 用串根做對話名，
+        所有咁樣嘅串就會**撞成同一條對話**。
+
+        所以對話命名要用呢個：只往上追，唔裁剪、唔摺疊。
+
+        訊息唔喺快取（或者冇 reply_to）就當它自己就係串根 ——
+        呢個正正就係「冇引用就開新對話」嘅行為。
+        """
+        seen: set[int] = set()
+        current = leaf_message_id
+        limit = self._cfg.group_chain_max_messages
+
+        for _ in range(limit):
+            if current in seen:
+                break
+            seen.add(current)
+
+            row = await self._db.fetchone(
+                "SELECT reply_to_id FROM group_cache WHERE chat_id = ? AND message_id = ?",
+                (chat_id, current),
+            )
+            if row is None or row["reply_to_id"] is None:
+                break
+            current = row["reply_to_id"]
+
+        return current
+
     def _trim(self, chain: list[dict]) -> list[dict]:
         """超出 token 預算時保留頭尾、摺疊中段。"""
         budget = self._cfg.group_chain_max_tokens
