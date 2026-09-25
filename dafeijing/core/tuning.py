@@ -21,6 +21,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from ..settings import MAX_SEARCH_RESULTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,9 +33,23 @@ class Knob:
 
     key: str          # 指令用的短名
     field: str        # Settings 的欄位名
-    kind: type        # int / float / str
+    kind: type        # int / float / str / bool
     help: str
     choices: tuple[str, ...] = ()   # 只對 str 有意義
+    # 數值項的容許範圍。**只寫下限是不夠的** —— 超出上限同樣會令請求失敗，
+    # 而且失敗得更隱蔽（每一次搜尋都 400，睇落似搜尋本身壞咗）。
+    # 實際撞過：`/tune set results_thorough 30`。None 代表不設限。
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+
+    @property
+    def range_hint(self) -> str:
+        """容許範圍，供 /tune 一覽顯示。沒有範圍就回空字串。"""
+        if self.kind not in (int, float) or (self.minimum is None and self.maximum is None):
+            return ""
+        low = "−∞" if self.minimum is None else self.minimum
+        high = "+∞" if self.maximum is None else self.maximum
+        return f"（{low}–{high}）"
 
 
 KNOBS: tuple[Knob, ...] = (
@@ -53,10 +69,28 @@ KNOBS: tuple[Knob, ...] = (
         "設成 - 代表留空（用引擎預設，最準但最貴）。"
         "各引擎支援的分級不同，所以不寫死驗證",
     ),
-    Knob("results_quick", "search_results_quick", int, "判斷說「一個事實就夠」時撈幾條"),
-    Knob("results", "search_max_results", int, "一般情況撈幾條"),
-    Knob("results_thorough", "search_results_thorough", int, "判斷說「小眾冷門」時撈幾條"),
-    Knob("results_total", "search_max_total_results", int, "一次請求的結果總上限"),
+    # 撈幾多條有硬上限（見 settings.MAX_SEARCH_RESULTS）—— 超出會令每一次
+    # 搜尋請求都 400，所以上下限一齊寫死。
+    Knob(
+        "results_quick", "search_results_quick", int,
+        "判斷說「一個事實就夠」時撈幾條",
+        minimum=1, maximum=MAX_SEARCH_RESULTS,
+    ),
+    Knob(
+        "results", "search_max_results", int,
+        "一般情況撈幾條",
+        minimum=1, maximum=MAX_SEARCH_RESULTS,
+    ),
+    Knob(
+        "results_thorough", "search_results_thorough", int,
+        "判斷說「小眾冷門」時撈幾條",
+        minimum=1, maximum=MAX_SEARCH_RESULTS,
+    ),
+    Knob(
+        "results_total", "search_max_total_results", int,
+        "一次請求的結果總上限（官網冇寫上限，未指定時預設 50）",
+        minimum=1,
+    ),
     Knob("fetch", "fetch_max_urls", int, "一則訊息最多讀幾個對方貼的連結"),
     Knob("context", "decision_context_messages", int, "判斷要看幾則上文"),
     Knob("confidence", "decision_min_confidence", float, "判斷信心低於此值就當作沒判斷"),
@@ -104,10 +138,18 @@ def coerce(knob: Knob, raw: str) -> Any:
             return False
         raise ValueError(f"{knob.key} 要是開／關（on／off），收到 {raw!r}")
     try:
-        return knob.kind(value)
+        converted = knob.kind(value)
     except ValueError as exc:
         kind_label = {int: "整數", float: "數字", str: "文字"}[knob.kind]
         raise ValueError(f"{knob.key} 要是{kind_label}，收到 {raw!r}") from exc
+
+    # 範圍要在**設定那一刻**就擋。放佢過去，錯誤會延後到下一次請求才爆，
+    # 而且訊息完全指唔返係邊個設定搞出嚟。
+    if knob.minimum is not None and converted < knob.minimum:
+        raise ValueError(f"{knob.key} 最少 {knob.minimum}，收到 {converted}")
+    if knob.maximum is not None and converted > knob.maximum:
+        raise ValueError(f"{knob.key} 最多 {knob.maximum}，收到 {converted}")
+    return converted
 
 
 class Tuning:

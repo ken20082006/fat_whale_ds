@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from dafeijing.settings import SEARCH_MODES, Settings
+from dafeijing.settings import MAX_SEARCH_RESULTS, SEARCH_MODES, Settings
 
 
 def test_search_fields_are_distinct():
@@ -51,6 +51,40 @@ def test_required_fields_have_no_defaults():
     """必填欄位不該有預設值，否則會用假金鑰靜靜啟動。"""
     for name in ("telegram_bot_token", "openrouter_api_key"):
         assert Settings.model_fields[name].is_required(), name
+
+
+def test_search_result_counts_are_capped():
+    """撈幾多條有硬上限 —— 超過會令**每一次**搜尋請求都 HTTP 400。
+
+    實際撞過：`/tune set results_thorough 30` 之後，所有搜尋都回
+    「Too big: expected number to be <=25」，搜尋功能等於整個廢掉。
+    錯誤延後到下一次請求才爆，而且訊息指唔返係邊個設定搞出嚟。
+    """
+    base = {"telegram_bot_token": "x", "openrouter_api_key": "y"}
+
+    for field in (
+        "search_results_quick",
+        "search_max_results",
+        "search_results_thorough",
+    ):
+        upper = Settings(**base, **{field: MAX_SEARCH_RESULTS})
+        assert getattr(upper, field) == MAX_SEARCH_RESULTS
+
+        with pytest.raises(ValidationError):
+            Settings(**base, **{field: MAX_SEARCH_RESULTS + 1})
+
+        # 下限同樣要守 —— 0 條結果同 30 條一樣無意義
+        with pytest.raises(ValidationError):
+            Settings(**base, **{field: 0})
+
+
+def test_total_results_has_a_lower_bound_only():
+    """官網冇寫 max_total_results 的上限（未指定時預設 50），所以只設下限。"""
+    base = {"telegram_bot_token": "x", "openrouter_api_key": "y"}
+
+    assert Settings(**base, search_max_total_results=200).search_max_total_results == 200
+    with pytest.raises(ValidationError):
+        Settings(**base, search_max_total_results=0)
 
 
 def test_reasoning_off_by_default():

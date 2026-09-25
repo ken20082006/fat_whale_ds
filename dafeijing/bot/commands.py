@@ -656,7 +656,9 @@ async def cmd_tune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for knob in KNOBS:
             mark = "★" if knob.key in overridden else "　"
             value = svc.tuning.current(knob)
-            lines.append(f"{mark} {knob.key} = {value if value != '' else '(空)'}")
+            lines.append(
+                f"{mark} {knob.key} = {value if value != '' else '(空)'}{knob.range_hint}"
+            )
             lines.append(f"　　{knob.help}")
         lines.append("")
         lines.append(usage)

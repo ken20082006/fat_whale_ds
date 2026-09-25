@@ -16,6 +16,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #   always   每則都搜
 SEARCH_MODES = ("off", "trigger", "auto", "always")
 
+# 伺服器端工具 `max_results` 的容許上限。官方文件寫「1–25（Perplexity 係
+# 1–20）」，這裡取**最低嗰個** —— engine 本身都係可調項，唔可以假設佢係邊個，
+# 取最低就永遠唔會撞到上限。
+#
+# 超過的後果是全局而且嚴重的：**每一次**搜尋請求都會 HTTP 400
+# （"Too big: expected number to be <=25"），等於整個搜尋功能廢掉。
+# 實際撞過一次：`/tune set results_thorough 30`。
+MAX_SEARCH_RESULTS = 20
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -103,6 +112,8 @@ class Settings(BaseSettings):
     # 撈幾多條是唯一能調召回率的旋鈕 —— 外掛每次請求只搜一次，查詢由引擎
     # 自己從對話推導，模型無權指定。小眾名詞（例如某個型號名是否存在）
     # 撈得少就會直接漏掉。
+    # 上下限見 MAX_SEARCH_RESULTS。這幾個數字**改錯會令每次搜尋都失敗**，
+    # 所以載入時就驗證，不要等到第一次搜尋才發現。
     search_results_quick: int = 3
     search_results_thorough: int = 10
     # 伺服器端工具一次請求的結果總上限。**限結果不限請求** —— 這個參數只
@@ -252,6 +263,30 @@ class Settings(BaseSettings):
 
     def is_admin(self, tg_user_id: int | None) -> bool:
         return tg_user_id is not None and tg_user_id in self.admin_ids
+
+    @field_validator(
+        "search_results_quick", "search_max_results", "search_results_thorough"
+    )
+    @classmethod
+    def _validate_search_result_counts(cls, value: int, info) -> int:
+        """撈幾多條有硬上限，設錯會令每一次搜尋都 400。
+
+        這一道守住 `.env`；`/tune` 那條路是另一道閘（見 core/tuning.py 的
+        Knob.minimum / maximum）—— 兩條路都要守，因為兩者都可以改壞。
+        """
+        if not 1 <= value <= MAX_SEARCH_RESULTS:
+            raise ValueError(
+                f"{info.field_name} 要在 1–{MAX_SEARCH_RESULTS} 之間，收到 {value}"
+            )
+        return value
+
+    @field_validator("search_max_total_results")
+    @classmethod
+    def _validate_total_results(cls, value: int) -> int:
+        """總上限只設下限 —— 官網冇寫上限（未指定時預設 50）。"""
+        if value < 1:
+            raise ValueError(f"search_max_total_results 最少 1，收到 {value}")
+        return value
 
     @field_validator("search_mode")
     @classmethod

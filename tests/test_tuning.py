@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from dafeijing.core.tuning import KNOBS, Tuning, coerce
-from dafeijing.settings import Settings
+from dafeijing.settings import MAX_SEARCH_RESULTS, Settings
 from dafeijing.store.db import Database
 
 
@@ -101,6 +101,55 @@ def test_empty_value_can_be_set():
     results = next(k for k in KNOBS if k.key == "results")
     with pytest.raises(ValueError):
         coerce(results, "-")
+
+
+def test_numeric_knobs_reject_values_outside_the_range():
+    """上下限都要擋，唔可以只靠「說明」講。
+
+    實際撞過：`/tune set results_thorough 30` → 之後**每一次**搜尋都 HTTP 400
+    （伺服器端工具的 max_results 上限係 25，而 Perplexity 只到 20）。
+    錯誤延後到下一次請求才爆，而且完全指唔返係邊個設定搞出嚟。
+    """
+    thorough = next(k for k in KNOBS if k.key == "results_thorough")
+    assert coerce(thorough, str(MAX_SEARCH_RESULTS)) == MAX_SEARCH_RESULTS
+    with pytest.raises(ValueError):
+        coerce(thorough, str(MAX_SEARCH_RESULTS + 1))
+    with pytest.raises(ValueError):
+        coerce(thorough, "0")
+
+
+def test_range_is_shown_in_the_listing():
+    """有範圍就要顯示出嚟 —— 否則用家只會由 400 得知上限。"""
+    thorough = next(k for k in KNOBS if k.key == "results_thorough")
+    assert thorough.range_hint == f"（1–{MAX_SEARCH_RESULTS}）"
+
+    # 沒有範圍的項不要顯示多餘的括號
+    context = next(k for k in KNOBS if k.key == "context")
+    assert context.range_hint == ""
+
+
+def test_out_of_range_value_in_the_database_is_ignored():
+    """已經寫入資料庫的壞值，唔可以令 bot 起唔到，亦唔可以令搜尋一路 400。
+
+    載入時會被擋下、退回 .env 的值（與下面那個「亂寫的」同一個機制）。
+    這一條就是實際那次事故的復原路徑。
+    """
+    cfg = _cfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Database(Path(tmp) / "t.db")
+            await db.connect()
+            await db.execute(
+                "INSERT INTO runtime_settings (key, value, updated_at) VALUES (?,?,?)",
+                ("results_thorough", "30", "2026-01-01 00:00:00"),
+            )
+            tuning = Tuning(cfg, db)
+            assert await tuning.load() == 0
+            assert cfg.search_results_thorough == 10   # .env 的值
+            await db.close()
+
+    asyncio.run(scenario())
 
 
 def test_set_then_load_reapplies_the_override():
