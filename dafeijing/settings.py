@@ -219,12 +219,37 @@ class Settings(BaseSettings):
     # 影片與動圖**一律**外包給吃得了影片的模型 —— 主模型只看得懂靜態圖，
     # 而抽幾個定格看不出連續動作、節奏與字幕變化。外包不成就是沒有這個媒體，
     # 不抽格充數。見 media.describe_video。
-    # **只要有得揀，就要揀本地區用得到嘅。** 原本用 google/gemini-3.5-flash-lite，
-    # 但它對香港 IP 回 403「This model is not available in your region」——
-    # 而且連純文字都 403，即係完全用唔到（除非掛 VPN）。
-    # xiaomi/mimo-v2.6-flash 同樣食 video 輸入，輸出便宜約四倍
-    # （$0.28/M 對 $1.25/M）。實測收 mp4，連畫面字幕都讀得到。
-    video_delegate_model: str = "xiaomi/mimo-v2.6-flash"
+    # **揀模型時，「本地區用得到」同「真係睇得到」都要驗，唔可以睇型號名。**
+    #
+    # 換過兩次都係因為實測才發現問題：
+    #   1. google/gemini-3.5-flash-lite 對香港 IP 回 403
+    #      「This model is not available in your region」—— 連純文字都 403，
+    #      即係完全用唔到（除非掛 VPN）。而且失敗係靜默的，因為
+    #      describe_video 會 catch 例外再回 None。
+    #   2. xiaomi/mimo-v2.6-flash 收 mp4、夠快，但**準確度不足**：
+    #      實測《古惑仔》烏鴉反枱嗰段，佢講成「一名女子……她將圓桌掀翻」，
+    #      連主角性別都錯。
+    #
+    # xiaomi 的 input_modalities 一樣有 video，但影片描述唔夠準 —— 所以
+    # **架構欄位只證明「食得落」，唔證明「睇得清」**，要真實片驗。
+    #
+    # bytedance-seed/seed-2.0-mini：實測 4 條片都準（捉到性別、動作、
+    # 甚至字幕原文），每條約 5–7 秒、$0.0003–0.0005。
+    video_delegate_model: str = "bytedance-seed/seed-2.0-mini"
+
+    # **真 GIF（image/gif）要交給另一個模型，而且要用 image_url。**
+    #
+    # 這不是偏好問題，是能力問題。實測 10 個收片模型，真 GIF 只有 xiaomi
+    # 睇得到（而且要經 image_url，經 video_url 係 HTTP 400）。
+    #
+    # 更麻煩係其他人**唔會報錯**，而係用兩種都會污染快取嘅方式失敗：
+    #   seed-1.6-flash → 憑空作一個完全唔同嘅場景（講到細節，最似真）
+    #   seed-2.0-mini  → 回「請提供具體內容」
+    # 兩者都會被當成正常描述寫入 media_notes，並按 unique_id 永久保存 ——
+    # 之後嗰條 GIF 每次都會攞住一句垃圾餵主模型。
+    #
+    # 而 GIF 唔係邊緣案例：實測快取裡 10 條全部係 animation。
+    gif_delegate_model: str = "xiaomi/mimo-v2.6-flash"
 
     # **影片輸入按秒計費**：Gemini 預設每秒抽一格、每格約 260 token，所以
     # 300 秒約 78,000 token ≈ $0.023（flash-lite $0.30/M）。抽格那條路只花

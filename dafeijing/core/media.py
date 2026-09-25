@@ -167,8 +167,12 @@ async def remember_note(
 async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote | None:
     """把整段動態素材交給外援模型看，拿回一段解說。
 
-    **失敗一律回 None**，由呼叫端退回抽格 —— 外包是加分項，不是必要路徑。
-    所以這裡連例外都不往外丟：外包掛掉不該讓整則訊息讀不到。
+    **失敗一律回 None**，呼叫端當作「冇睇過呢個媒體」—— 外包是加分項，不是
+    必要路徑，所以這裡連例外都不往外丟：外包掛掉不該讓整則訊息讀不到。
+
+    **真 GIF 同影片走唔同模型、用唔同的 content 型別**（見 settings 的
+    gif_delegate_model 說明）。分流靠檔頭判斷，不靠來源標籤 —— Telegram 的
+    「動圖」可能係 GIF 也可能係被轉過的 MP4，看來源會判錯。
 
     llm 為 None（或未開啟）時直接跳過，呼叫端就不會多付一次呼叫。
     db 有值時會按 media 的穩定識別碼快取結果 —— 同一條片再傳就重用。
@@ -204,7 +208,23 @@ async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote 
         logger.info("影片本體取不到，退回抽格：%s", exc)
         return None
 
-    data_url = f"data:{sniff_mime(blob)};base64,{base64.b64encode(blob).decode()}"
+    mime = sniff_mime(blob)
+    data_url = f"data:{mime};base64,{base64.b64encode(blob).decode()}"
+
+    # **真 GIF 走另一條路：另一個模型，而且要用 image_url。**
+    #
+    # 這不是偏好問題，是能力問題。實測多個收片模型都「睇唔到」真 GIF，
+    # 而且唔會報錯 —— 佢哋會憑空作一個場景，或者回「請提供具體內容」，
+    # 而兩種都會被當成正常描述寫入 media_notes 並永久保存。詳見
+    # settings.gif_delegate_model。
+    if mime.startswith("image/"):
+        model = cfg.gif_delegate_model
+        media_part = {"type": "image_url", "image_url": {"url": data_url}}
+        what = "GIF"
+    else:
+        model = cfg.video_delegate_model
+        media_part = {"type": "video_url", "video_url": {"url": data_url}}
+        what = "影片"
 
     try:
         result = await llm.chat(
@@ -213,11 +233,11 @@ async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote 
                     "role": "user",
                     "content": [
                         {"type": "text", "text": _DELEGATE_PROMPT},
-                        {"type": "video_url", "video_url": {"url": data_url}},
+                        media_part,
                     ],
                 }
             ],
-            model=cfg.video_delegate_model,
+            model=model,
             max_tokens=cfg.video_delegate_max_tokens,
             # **刻意不傳 reasoning=False。** 這個端點要求一定要推理，傳
             # `{"enabled": false}` 會回 400：「Reasoning is mandatory for this
@@ -230,8 +250,8 @@ async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote 
         )
     except Exception:
         # 外包用什麼模型、回來什麼形狀都不關這裡的事 —— 任何失敗都等於
-        # 「這次沒外包成」，退回抽格就好。
-        logger.exception("外包看片失敗，退回抽格")
+        # 「這次沒外包成」，當作冇睇過就好。
+        logger.exception("外包看片失敗，當作冇睇過")
         return None
 
     text = (result.text or "").strip()
@@ -242,7 +262,8 @@ async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote 
     await remember_note(db, picked.unique_id, picked.source, text, result.model)
 
     logger.info(
-        "外包看片：%s → %d 字（$%.6f）",
+        "外包%s：%s → %d 字（$%.6f）",
+        what,
         picked.source,
         len(text),
         result.cost,

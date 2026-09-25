@@ -357,9 +357,30 @@ def test_sniff_mime_tells_gif_from_mp4():
 class _DelegateCfg:
     video_delegate_max_bytes = 1024
     video_delegate_max_seconds = 60.0
-    video_delegate_model = "test/model"
+    video_delegate_model = "test/video-model"
+    # 真 GIF 走另一個模型 —— 實測冇一個收片模型睇得到真 GIF，
+    # 而佢哋失敗嘅方式會污染快取。見 media.describe_video 的分流。
+    gif_delegate_model = "test/gif-model"
     video_delegate_max_tokens = 100
     video_delegate_max_chars = 300
+
+
+class _DelegateLLM:
+    """記低實際送出嘅 payload，回一句固定描述。"""
+
+    def __init__(self, reply: str = "一段描述") -> None:
+        self._reply = reply
+        self.calls: list[dict] = []
+
+    async def chat(self, messages, *, model=None, max_tokens=None, **kwargs):
+        self.calls.append({"messages": messages, "model": model})
+        return SimpleNamespace(text=self._reply, cost=0.0, model=model)
+
+
+def _gif_bytes() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(buffer, format="GIF")
+    return buffer.getvalue()
 
 
 # ── 外包描述的快取 ──────────────────────────────────────
@@ -443,3 +464,75 @@ def test_delegate_prompt_asks_for_detail_not_a_sentence_cap():
     for aspect in ("次序", "字幕", "動作", "氣氛"):
         assert aspect in prompt, aspect
     assert "不確定就不要講" in prompt
+
+
+# ── 真 GIF 與影片走不同模型 ────────────────────────────
+#
+# 實測 10 個收片模型，**真 GIF 只有 xiaomi 睇得到**，而且要經 image_url。
+# 其餘唔會報錯，而係憑空作一個場景（seed-1.6-flash），或者回「請提供具體
+# 內容」（seed-2.0-mini）—— 兩種都會被當成正常描述寫入 media_notes 並
+# 按 unique_id 永久保存，即係之後每次都攞住一句垃圾餵主模型。
+#
+# 所以這個分流要釘住，唔可以日後改返做一律 video_url。
+
+
+def test_true_gif_goes_to_the_gif_model_as_an_image():
+    async def scenario() -> None:
+        llm = _DelegateLLM()
+        picked = Picked("f", "animation", unique_id="g1")
+        note = await media.describe_video(
+            _FakeBot(_gif_bytes()), picked, _DelegateCfg(), llm
+        )
+
+        assert note is not None and note.text
+        call = llm.calls[0]
+        assert call["model"] == "test/gif-model"
+        part = call["messages"][0]["content"][1]
+        assert part["type"] == "image_url", "真 GIF 一定要用 image_url"
+
+    asyncio.run(scenario())
+
+
+def test_video_goes_to_the_video_model_as_a_video():
+    async def scenario() -> None:
+        mp4 = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 64
+        llm = _DelegateLLM()
+        picked = Picked("f", "video", unique_id="v1")
+        note = await media.describe_video(_FakeBot(mp4), picked, _DelegateCfg(), llm)
+
+        assert note is not None and note.text
+        call = llm.calls[0]
+        assert call["model"] == "test/video-model"
+        part = call["messages"][0]["content"][1]
+        assert part["type"] == "video_url"
+
+    asyncio.run(scenario())
+
+
+def test_the_split_uses_the_file_header_not_the_source_label():
+    """來源標籤唔可靠 —— Telegram 嘅「動圖」可能係 GIF，亦可能係 MP4。
+
+    `pick_file` 對兩者都標 `animation`，所以用標籤分流一定錯。
+    """
+    mp4 = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 64
+
+    async def scenario() -> None:
+        gif_llm = _DelegateLLM()
+        await media.describe_video(
+            _FakeBot(_gif_bytes()),
+            Picked("f", "animation", unique_id="a1"),
+            _DelegateCfg(),
+            gif_llm,
+        )
+        mp4_llm = _DelegateLLM()
+        await media.describe_video(
+            _FakeBot(mp4),
+            Picked("f", "animation", unique_id="a2"),
+            _DelegateCfg(),
+            mp4_llm,
+        )
+
+        assert gif_llm.calls[0]["model"] == "test/gif-model"
+        assert mp4_llm.calls[0]["model"] == "test/video-model"
+
+    asyncio.run(scenario())
