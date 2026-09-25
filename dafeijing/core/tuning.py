@@ -102,6 +102,13 @@ KNOBS: tuple[Knob, ...] = (
         "把模型的思考過程貼出來（beta）｜推理沒開就沒有內容可貼",
     ),
     Knob("why_chars", "show_reasoning_max_chars", int, "思考過程最多貼幾個字"),
+    # 開放它的理由跟其他項一致：改錯不會令 bot 起不來（判斷標準見本檔開頭）。
+    # 而它偏偏是最需要即時開關的一項 —— 遷移期間要開，遷移完要關，
+    # 改 .env 再重啟容器太慢。
+    Knob(
+        "maintenance", "maintenance_mode", bool,
+        "維護模式｜開啟後群組只回一句「調整緊」，不做任何真工作（私聊不受影響）",
+    ),
 )
 
 _BY_KEY = {knob.key: knob for knob in KNOBS}

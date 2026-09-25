@@ -143,6 +143,19 @@ class Settings(BaseSettings):
     # 貼出來的長度上限。思考可以極長，不設界會洗版。
     show_reasoning_max_chars: int = 1500
 
+    # ── 維護模式 ──
+    # 遷移或改版期間用：群組被指名也不做任何真工作（不叫模型、不查引用串、
+    # 不看片、不抽記憶），只回一句人設語氣的「調整緊」。
+    #
+    # 為什麼要這個：改版期間群組是 live 的，但答案會唔準。與其靜靜哋答錯，
+    # 不如老實講調整緊。**私聊完全不受影響** —— 只影響群組的回應路徑。
+    #
+    # 開啟方式：/tune set maintenance on（即時生效，不必重啟容器）
+    maintenance_mode: bool = False
+    # 同一個群在這段時間內只出一則通知。通知不是答案，整個群每個人 @ 一次
+    # 就會洗版。純記憶體，重啟歸零。
+    maintenance_notice_cooldown_seconds: int = 600
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")
