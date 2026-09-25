@@ -27,7 +27,7 @@ from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
 from .services import Services
-from .ui import reply_markdown, reply_plain, send_sticker, typing
+from .ui import reply_markdown, reply_plain, send_reasoning, send_sticker, typing
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +303,26 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
             display_name=svc.bot_name,
             text=outcome.text,
         )
+
+    # 思考過程（beta）。同樣當成「回覆使用者那一則」送出並補進快取 ——
+    # 否則別人回覆這一則時，引用鏈會在它身上斷掉、root 變成它自己，整條串
+    # 就斷了（見 chain.py 關於 reply_to_id 的說明）。
+    #
+    # **快取只記一句標註，不記思考原文。** 原樣存進去的話，之後每一輪的
+    # 引用串都會多背一段模型的自言自語。
+    if outcome.reasoning:
+        reasoning_message = await send_reasoning(
+            context.bot, message.chat_id, outcome.reasoning, reply_to=message.message_id
+        )
+        if reasoning_message is not None:
+            await svc.chain.cache_message(
+                chat_id=message.chat_id,
+                message_id=reasoning_message.message_id,
+                reply_to_id=message.message_id,
+                user_id=svc.bot_id,
+                display_name=svc.bot_name,
+                text="〔思考過程〕",
+            )
 
     # 貼圖另外送一則。同樣要補進快取 —— 否則別人回覆那張貼圖時，
     # 引用鏈會斷在它身上，而且圖也抓不回來。

@@ -116,6 +116,22 @@ class Settings(BaseSettings):
     timezone_offset_hours: int = 8
     timezone_label: str = "香港時間"
 
+    # ── 思考過程（beta）──────────────────────────────────
+    # 把模型的思考過程貼出來，收在一個「撳一下展開」的引用塊裡面。
+    #
+    # **beta，預設關著。** 關著的時候完全不會出現，原有行為一模一樣。
+    # 開啟之後仍然只有**推理真的開過**的回覆才有內容可貼 —— 推理沒開就
+    # 沒有思考過程（見 /think，以及 Jev 的逐則判斷）。
+    #
+    # 思考內容是模型自言自語的原文，可能覆述到人設或系統提示，所以貼之前
+    # 一定過一次 find_system_leak，命中就**整段不貼**。它也不會落庫 ——
+    # 落庫的話下一輪歷史會多一段，模型就會當成自己講過的話。
+    #
+    # 開啟方式：/tune set why on（可隨時關掉，即時生效）
+    show_reasoning: bool = False
+    # 貼出來的長度上限。思考可以極長，不設界會洗版。
+    show_reasoning_max_chars: int = 1500
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

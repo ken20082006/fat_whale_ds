@@ -1,4 +1,8 @@
-from dafeijing.render.markdown import strip_markdown, to_telegram_html
+from dafeijing.render.markdown import (
+    as_expandable_blockquote,
+    strip_markdown,
+    to_telegram_html,
+)
 
 
 def test_escapes_html():
@@ -63,3 +67,31 @@ def test_no_placeholder_leaks():
 def test_strip_markdown():
     assert strip_markdown("**粗**") == "粗"
     assert strip_markdown("```\ncode\n```") == "code"
+
+
+# ── 思考過程的呈現（beta）──────────────────────────────
+
+
+def test_expandable_blockquote_wraps_the_text():
+    assert as_expandable_blockquote("想一想") == (
+        "<blockquote expandable>想一想</blockquote>"
+    )
+
+
+def test_expandable_blockquote_escapes_html():
+    """思考是任意文字 —— 唔跳脫嘅話，裡面一個 `<` 就會令整則訊息送唔出去。"""
+    assert as_expandable_blockquote("if a < b && c > d") == (
+        "<blockquote expandable>if a &lt; b &amp;&amp; c &gt; d</blockquote>"
+    )
+
+
+def test_expandable_blockquote_keeps_model_tags_as_text():
+    """模型自己在思考裡寫的標籤，要當成文字而不是標籤。"""
+    assert "<b>" not in as_expandable_blockquote("<b>粗體</b>")
+
+
+def test_expandable_blockquote_of_nothing_is_empty():
+    """空字串回空字串，呼叫端據此決定唔使送。"""
+    assert as_expandable_blockquote("") == ""
+    assert as_expandable_blockquote("   ") == ""
+    assert as_expandable_blockquote(None) == ""

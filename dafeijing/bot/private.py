@@ -12,7 +12,7 @@ from ..core.chat import ChatRequest
 from ..llm.openrouter import LLMError
 from .commands import get_services
 from .ingest import collect
-from .ui import reply_markdown, reply_plain, send_sticker, typing
+from .ui import reply_markdown, reply_plain, send_reasoning, send_sticker, typing
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,12 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     await reply_markdown(message, outcome.text)
+
+    # 思考過程（beta）。開關關著時 outcome.reasoning 一定是 None，這裡不會做任何事。
+    if outcome.reasoning:
+        await send_reasoning(
+            context.bot, message.chat_id, outcome.reasoning, reply_to=message.message_id
+        )
 
     if outcome.sticker_file_id:
         await send_sticker(

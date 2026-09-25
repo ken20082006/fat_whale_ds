@@ -133,7 +133,8 @@ _ADMIN_HELP = (
     "  /cost [天數] — 用量與費用總帳\n"
     "  /stats — 運轉狀態\n"
     "  /reload_persona — 改完人設後重新載入，不必重啟\n"
-    "  /tune — 執行期調搜尋與判斷參數，立即生效且重啟仍在\n"
+    "  /tune — 執行期調搜尋、判斷與顯示參數，立即生效且重啟仍在\n"
+    "　　　　　（思考過程開關：/tune set why on）\n"
 )
 
 
@@ -641,7 +642,7 @@ async def cmd_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_tune(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """執行期調參。改完立即生效，而且寫進資料庫、重啟仍在。
 
-    只開放搜尋與判斷相關的參數 —— 金鑰、路徑、模型代號不開放，
+    只開放搜尋、判斷與顯示相關的參數 —— 金鑰、路徑、模型代號不開放，
     那些改錯會令 bot 起不來，還是在 .env 改安全。見 core/tuning.py。
     """
     svc = get_services(context)

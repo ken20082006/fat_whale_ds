@@ -236,3 +236,53 @@ def test_length_with_searches_does_not_blame_reasoning(client):
         )
     assert "問窄" in str(excinfo.value)
     assert "think off" not in str(excinfo.value)
+
+
+# ── 思考過程原文 ──────────────────────────────────────
+#
+# 照真實回應寫（用 scripts/ping.py 直接探測，唔係照文件猜）：模型會回
+# `message.reasoning`（字串），同時也回一個結構化的 `message.reasoning_details`。
+# 這個欄位是 beta 顯示功能（見 settings.show_reasoning）的來源。
+
+
+def _reasoning_response(**extra):
+    return {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "7006652", **extra},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"completion_tokens_details": {"reasoning_tokens": 132}},
+    }
+
+
+def test_reads_the_reasoning_text(client):
+    result = client._parse(
+        _reasoning_response(
+            reasoning="We need answer Chinese. Need compute 1234*5678."
+        )
+    )
+    assert result.reasoning.startswith("We need answer Chinese")
+
+
+def test_reasoning_content_is_an_alias(client):
+    """`reasoning_content` 是舊名，不同模型／引擎仍然會用它。"""
+    assert client._parse(_reasoning_response(reasoning_content="想一想")).reasoning == "想一想"
+
+
+def test_no_reasoning_gives_an_empty_string(client):
+    """推理沒開就沒有思考過程 —— 呼叫端據此決定唔使送。"""
+    assert client._parse(_reasoning_response()).reasoning == ""
+
+
+def test_structured_reasoning_details_is_not_used_as_text(client):
+    """`reasoning_details` 是結構化陣列，不是給人看的文字 —— 當作沒有。
+
+    硬轉的話會貼出一堆 JSON 給使用者。
+    """
+    result = client._parse(
+        _reasoning_response(reasoning_details=[{"type": "reasoning.text", "text": "x"}])
+    )
+    assert result.reasoning == ""

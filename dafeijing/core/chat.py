@@ -203,6 +203,9 @@ class ChatOutcome:
     text: str
     result: LLMResult
     sticker_file_id: str | None = None
+    # 思考過程（beta）。None 代表「唔使貼」—— 功能未開、這次沒有推理、
+    # 或者內容疑似洩漏被擋下。呼叫端只負責「有就送」。
+    reasoning: str | None = None
 
 
 class ChatService:
@@ -486,6 +489,28 @@ class ChatService:
             )
             result.text = LEAK_REPLY
 
+        # 思考過程（beta）。開關關著時連讀都不讀。
+        #
+        # **一定要過同一道洩漏檢查。** 思考是模型自言自語的原文，它可能覆述
+        # 到人設或系統提示 —— 而人設那部分正是我們不想讓人看見的。命中就
+        # 整段不貼，不做部分遮蔽：半截的思考無意義，拼起來反而更容易看出原文。
+        #
+        # 它**不落庫** —— 落庫的話下一輪歷史會多一段，模型就會當成自己說過
+        # 的話（與 media_note 同一個道理）。
+        reasoning_text: str | None = None
+        if self._cfg.show_reasoning and result.reasoning:
+            reasoning_leak = find_system_leak(result.reasoning, self._persona.static_text)
+            if reasoning_leak:
+                logger.warning(
+                    "思考過程疑似洩漏（%d 字重疊），不貼出：%s…",
+                    len(reasoning_leak),
+                    reasoning_leak[:40],
+                )
+            else:
+                reasoning_text = truncate(
+                    result.reasoning, self._cfg.show_reasoning_max_chars
+                )
+
         # 成功後才落庫。失敗的回合不留下痕跡，使用者重試時不會出現半截對話。
         # 只留文字描述不留圖檔：省空間，也避免使用者的照片被長期保存。
         await self._sessions.append(
@@ -543,4 +568,5 @@ class ChatService:
             text=result.text,
             result=result,
             sticker_file_id=sticker_file_id,
+            reasoning=reasoning_text,
         )

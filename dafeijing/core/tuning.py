@@ -10,8 +10,9 @@
 不一定生效（`.env` 被其他工具還原過一次，查了很久）。搜尋這種要憑感覺
 調的參數，改一次重啟一次太慢。
 
-**只開放搜尋與判斷相關的參數。** 金鑰、路徑、模型代號那些不開放 ——
+**只開放搜尋、判斷與顯示相關的參數。** 金鑰、路徑、模型代號那些不開放 ——
 它們改錯會令 bot 起不來，而改完要重啟才知道，還是在 `.env` 改安全。
+判斷標準是「改錯會唔會令 bot 起唔到」，不是「屬唔屬於搜尋」。
 """
 
 from __future__ import annotations
@@ -62,6 +63,11 @@ KNOBS: tuple[Knob, ...] = (
     Knob("reason_low", "reasoning_budget_low", float, "要思考時 max_tokens 最少放寬幾倍"),
     Knob("reason_high", "reasoning_budget_high", float, "要思考時 max_tokens 最多放寬幾倍"),
     Knob("memory_gate", "memory_decision_threshold", float, "記憶抽取的前置閘門檻"),
+    Knob(
+        "why", "show_reasoning", bool,
+        "把模型的思考過程貼出來（beta）｜推理沒開就沒有內容可貼",
+    ),
+    Knob("why_chars", "show_reasoning_max_chars", int, "思考過程最多貼幾個字"),
 )
 
 _BY_KEY = {knob.key: knob for knob in KNOBS}
@@ -71,6 +77,11 @@ _BY_FIELD = {knob.field: knob for knob in KNOBS}
 # Telegram 的指令參數不會帶空字串（空白會被切掉），所以「設成空」要用
 # 一個代表空的寫法。`-` 最直覺，另外接受 none / 空 / （空）。
 _EMPTY_TOKENS = {"-", "none", "空", "(空)", "（空）", "null"}
+
+# 開關類參數的寫法。**不可以直接 `bool(value)`** —— 那樣 "off" 會變成 True，
+# 而且係靜默錯誤：使用者以為關咗，其實開咗。所以只認列出來的寫法。
+_TRUE_TOKENS = {"on", "true", "1", "yes", "y", "開", "開起", "開啟"}
+_FALSE_TOKENS = {"off", "false", "0", "no", "n", "關", "關起", "關閉"}
 
 
 def coerce(knob: Knob, raw: str) -> Any:
@@ -85,6 +96,13 @@ def coerce(knob: Knob, raw: str) -> Any:
         value = ""
     if knob.choices and value not in knob.choices:
         raise ValueError(f"{knob.key} 只能是 {'／'.join(knob.choices)}，收到 {value!r}")
+    if knob.kind is bool:
+        token = value.lower()
+        if token in _TRUE_TOKENS:
+            return True
+        if token in _FALSE_TOKENS:
+            return False
+        raise ValueError(f"{knob.key} 要是開／關（on／off），收到 {raw!r}")
     try:
         return knob.kind(value)
     except ValueError as exc:

@@ -47,6 +47,44 @@ def test_coerce_validates_choices_and_types():
         coerce(results, "好多")
 
 
+def test_coerce_handles_booleans():
+    """開關項不可以直接 `bool(value)` —— 那樣 "off" 會變成 True。
+
+    那是最壞的一種錯：使用者以為關咗，其實開咗，而且冇任何提示。
+    """
+    why = next(k for k in KNOBS if k.key == "why")
+    for token in ("on", "ON", "true", "1", "開"):
+        assert coerce(why, token) is True, token
+    for token in ("off", "OFF", "false", "0", "關"):
+        assert coerce(why, token) is False, token
+    with pytest.raises(ValueError):
+        coerce(why, "開關")          # 兩頭唔到岸要報錯，不要靜靜揀一個
+
+
+def test_boolean_knob_round_trips_through_the_database():
+    """存進資料庫的是 str(True)，重新載入時要解得返。"""
+    cfg = _cfg()
+
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Database(Path(tmp) / "t.db")
+            await db.connect()
+            tuning = Tuning(cfg, db)
+
+            assert cfg.show_reasoning is False        # 預設關（beta）
+            await tuning.set("why", "on")
+            assert cfg.show_reasoning is True
+
+            fresh = _cfg()
+            again = Tuning(fresh, db)
+            assert await again.load() == 1
+            assert fresh.show_reasoning is True       # 重啟之後仍然開著
+
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_empty_value_can_be_set():
     """說明寫「留空用引擎預設」，指令就要真係做得到。
 

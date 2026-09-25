@@ -85,6 +85,20 @@ def to_telegram_html(markdown_text: str) -> str:
     return text.strip()
 
 
+def as_expandable_blockquote(text: str) -> str:
+    """把純文字包成 Telegram 的「撳一下展開」引用塊。
+
+    用於貼出模型的思考過程。內容**一律跳脫**：思考是任意文字，裡面出現
+    `<` 或 `&` 的話，不跳脫就會被 Telegram 當成標籤，整則訊息送不出去。
+
+    空字串回空字串 —— 呼叫端據此決定「唔使送」。
+    """
+    body = html.escape((text or "").strip(), quote=False)
+    if not body:
+        return ""
+    return f"<blockquote expandable>{body}</blockquote>"
+
+
 def strip_markdown(text: str) -> str:
     """移除常見 markdown 標記，用於通知等不需要格式的地方。"""
     text = _FENCE.sub(lambda m: m.group(2), text)

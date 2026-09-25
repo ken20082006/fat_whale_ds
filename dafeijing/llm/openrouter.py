@@ -36,6 +36,14 @@ class LLMResult:
     image_tokens: int = 0
     cost: float = 0.0
     finish_reason: str | None = None
+    # 模型的思考過程原文（推理開啟時才有）。實測 deepseek-v4.1-flash 會回
+    # `message.reasoning`（字串）與 `message.reasoning_details`（結構化），
+    # `reasoning_content` 是同義的舊名。**這裡刻意不讀 reasoning_details** ——
+    # 我們只需要貼出來，不需要原樣回傳給上游。
+    #
+    # 預設不顯示（beta，見 settings.show_reasoning），所以這裡照樣讀回來、
+    # 由呼叫端決定貼不貼；不讀的話那個開關就無從實現。
+    reasoning: str = ""
     # 伺服器端工具回報的搜尋次數。欄位是 server_tool_use_details，
     # 不是 server_tool_use —— 文件沒寫，是實測出來的。
     search_requests: int = 0
@@ -256,6 +264,7 @@ class OpenRouterClient:
             search_requests=search_requests,
             sources=_read_sources(message.get("annotations")),
             inference_cost=inference_cost,
+            reasoning=_read_reasoning(message),
         )
 
 
@@ -273,6 +282,21 @@ def _read_content(raw) -> str:
         ]
         return "".join(parts).strip()
     return (raw or "").strip()
+
+
+def _read_reasoning(message: dict) -> str:
+    """讀出模型的思考過程原文。沒有就回空字串。
+
+    `reasoning` 與 `reasoning_content` 是同一個東西的兩個名（官方文件明講
+    後者「functions identically to」前者），不同模型／引擎回的名不一樣，
+    所以兩個都吃。非字串（例如某些模型回的結構化陣列）一律當作沒有 ——
+    貼出去的是給人看的文字，硬轉只會貼出一堆 JSON。
+    """
+    for key in ("reasoning", "reasoning_content"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _read_sources(annotations) -> list[str]:
