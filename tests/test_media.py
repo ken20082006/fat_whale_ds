@@ -429,3 +429,17 @@ def test_describe_video_reports_why_it_skipped_instead_of_failing_silently():
     note = asyncio.run(media.describe_video(None, too_long, _DelegateCfg(), object()))
     assert note is not None and not note.text
     assert "長過" in note.skipped
+
+
+def test_delegate_prompt_asks_for_detail_not_a_sentence_cap():
+    """外包提示要夠詳細 —— 唔可以再限「四句以內」。
+
+    限死句數時，外包模型只講得出大意：動作、先後次序、字幕全部交代唔到，
+    而主模型手上就只有這段描述，之後就係半真半假咁講條片。
+    但「只描述你真正看到的」那條紀律要保留 —— 詳細不等於放縱它編。
+    """
+    prompt = media._DELEGATE_PROMPT
+    assert "四句" not in prompt
+    for aspect in ("次序", "字幕", "動作", "氣氛"):
+        assert aspect in prompt, aspect
+    assert "不確定就不要講" in prompt

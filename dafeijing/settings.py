@@ -211,9 +211,15 @@ class Settings(BaseSettings):
     # 10MB，所以「太長」與「太大」的訊息要分開講，使用者才知是哪一種。
     video_delegate_max_bytes: int = 10 * 1024 * 1024
 
-    # 解說的長度。它會落庫（成為對話紀錄的一部分），所以要有界。
-    video_delegate_max_tokens: int = 400
-    video_delegate_max_chars: int = 300
+    # 解說的長度。**要夠長才講得具體。** 限死在「四句以內」時，外包模型只
+    # 講得出大意 —— 動作、先後次序、字幕都交代不到，而主模型能講的就只有
+    # 這段描述。它只出現在當前這一則的提示裡（`media_note` 不落庫，見
+    # chat.py），所以放寬不會令對話歷史膨脹。
+    #
+    # max_tokens 放得比 max_chars 闊：這個端點要求一定要推理，推理 token
+    # 會**吃掉**這個額度，留太窄會連正文都寫唔完。
+    video_delegate_max_tokens: int = 1200
+    video_delegate_max_chars: int = 900
 
     # 一輪最多外包幾條「引用串裡的」影片。每條最貴約兩仙美元，所以預設
     # 只做最近一條 —— 一串裡有四條片就是 $0.09，不該默默發生。
