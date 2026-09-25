@@ -99,6 +99,21 @@ def as_expandable_blockquote(text: str) -> str:
     return f"<blockquote expandable>{body}</blockquote>"
 
 
+def prepend_thinking(reply_html: str, thinking: str | None) -> str:
+    """把思考過程接到回覆**最前面**，成為同一則訊息。
+
+    思考放在上面、答案在下面，與其他 app 的「已思考」收合塊一致。
+
+    **合併而不是另送一則**：一則訊息本來就可以同時放可展開的引用塊與正文，
+    分開送會變成兩條訊息，而且群組那條引用鏈還要多照顧一則（見 group.py）。
+    長度由 split_html 處理 —— 太長就照常分段，引用塊會自己收尾。
+    """
+    block = as_expandable_blockquote(thinking or "")
+    if not block:
+        return reply_html
+    return f"{block}\n\n{reply_html}" if reply_html else block
+
+
 def strip_markdown(text: str) -> str:
     """移除常見 markdown 標記，用於通知等不需要格式的地方。"""
     text = _FENCE.sub(lambda m: m.group(2), text)

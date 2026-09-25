@@ -374,7 +374,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await reply_plain(message, "本鯨查不到，出了點狀況。")
         return
 
-    await reply_markdown(message, outcome.text)
+    await reply_markdown(message, outcome.text, thinking=outcome.reasoning)
 
 
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

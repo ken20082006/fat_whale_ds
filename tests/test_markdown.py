@@ -1,5 +1,6 @@
 from dafeijing.render.markdown import (
     as_expandable_blockquote,
+    prepend_thinking,
     strip_markdown,
     to_telegram_html,
 )
@@ -95,3 +96,22 @@ def test_expandable_blockquote_of_nothing_is_empty():
     assert as_expandable_blockquote("") == ""
     assert as_expandable_blockquote("   ") == ""
     assert as_expandable_blockquote(None) == ""
+
+
+def test_prepend_thinking_puts_it_above_the_answer():
+    """思考與答案**同一則訊息** —— 上面思考、下面答案。"""
+    assert prepend_thinking("<b>答案</b>", "想一想") == (
+        "<blockquote expandable>想一想</blockquote>\n\n<b>答案</b>"
+    )
+
+
+def test_prepend_thinking_without_thinking_leaves_the_reply_untouched():
+    """開關關著時，回覆要一個字都唔變 —— beta 不可以影響原有輸出。"""
+    assert prepend_thinking("<b>答案</b>", None) == "<b>答案</b>"
+    assert prepend_thinking("<b>答案</b>", "   ") == "<b>答案</b>"
+
+
+def test_prepend_thinking_escapes_but_keeps_the_answer_intact():
+    out = prepend_thinking("<i>答</i>", "a < b && c")
+    assert out.startswith("<blockquote expandable>a &lt; b &amp;&amp; c</blockquote>")
+    assert out.endswith("<i>答</i>")

@@ -7,29 +7,34 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import html
 import logging
-import re
 from collections.abc import AsyncIterator
 
 from telegram import Message
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
-from ..render import as_expandable_blockquote, split_html, to_telegram_html
+from ..render import prepend_thinking, split_html, to_telegram_html
 from ..render.markdown import strip_markdown
 
 logger = logging.getLogger(__name__)
 
 
 async def reply_markdown(
-    message: Message, markdown_text: str, *, reply: bool = True
+    message: Message,
+    markdown_text: str,
+    *,
+    reply: bool = True,
+    thinking: str | None = None,
 ) -> Message | None:
     """把模型輸出轉成 HTML 後分段送出。
 
+    `thinking` 有值時，思考過程會接在**同一則訊息**最前面（可展開的引用塊）。
+    不合併的話會變成兩條訊息，而一則訊息本來就放得下兩者。
+
     回傳第一段的 Message（群組需要它的 message_id 來補快取），失敗則回傳 None。
     """
-    html = to_telegram_html(markdown_text)
+    html = prepend_thinking(to_telegram_html(markdown_text), thinking)
     chunks = split_html(html) or [""]
     bot = message.get_bot()
     first: Message | None = None
@@ -127,35 +132,6 @@ async def typing(bot, chat_id: int) -> AsyncIterator[None]:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-
-
-_TAG_STRIP = re.compile(r"<[^>]+>")
-
-
-async def send_reasoning(
-    bot, chat_id: int, text: str, *, reply_to: int | None = None
-) -> Message | None:
-    """貼出模型的思考過程（beta），收在可展開的引用塊裡。
-
-    回傳第一段的 Message，讓群組可以補進引用鏈快取；沒有內容或全失敗則回 None。
-
-    **這一則純屬附加品**，所以任何失敗都只在日誌留痕 —— 不該讓整輪回覆
-    出錯，也不該讓使用者見到一則錯誤訊息。
-    """
-    rendered = as_expandable_blockquote(text)
-    if not rendered:
-        return None
-
-    first: Message | None = None
-    for chunk in split_html(rendered) or [""]:
-        # 格式被拒時的後備：把這一段的標籤剝掉、還原實體，送回純文字。
-        plain = html.unescape(_TAG_STRIP.sub("", chunk)).strip()
-        sent = await _send_chunk(bot, chat_id, chunk, reply_to=reply_to, fallback=plain)
-        if sent is None:
-            break
-        if first is None:
-            first = sent
-    return first
 
 
 async def send_sticker(bot, chat_id: int, file_id: str, *, reply_to: int | None = None):
