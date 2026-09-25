@@ -223,6 +223,10 @@ async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote 
             # `{"enabled": false}` 會回 400：「Reasoning is mandatory for this
             # endpoint and cannot be disabled.」不同模型的要求不一樣，所以
             # 這裡交給端點自己決定 —— 傳錯只會白白失敗一次。
+            #
+            # 因為推理是強制的，`video_delegate_max_tokens` 一定要放得闊：
+            # 推理 token 會吃掉額度，留太窄會「想」到爆額、正文變空
+            # （實測推理佔 780–930 token）。見 settings.py。
         )
     except Exception:
         # 外包用什麼模型、回來什麼形狀都不關這裡的事 —— 任何失敗都等於

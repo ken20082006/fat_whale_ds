@@ -219,7 +219,12 @@ class Settings(BaseSettings):
     # 影片與動圖**一律**外包給吃得了影片的模型 —— 主模型只看得懂靜態圖，
     # 而抽幾個定格看不出連續動作、節奏與字幕變化。外包不成就是沒有這個媒體，
     # 不抽格充數。見 media.describe_video。
-    video_delegate_model: str = "google/gemini-3.5-flash-lite"
+    # **只要有得揀，就要揀本地區用得到嘅。** 原本用 google/gemini-3.5-flash-lite，
+    # 但它對香港 IP 回 403「This model is not available in your region」——
+    # 而且連純文字都 403，即係完全用唔到（除非掛 VPN）。
+    # xiaomi/mimo-v2.6-flash 同樣食 video 輸入，輸出便宜約四倍
+    # （$0.28/M 對 $1.25/M）。實測收 mp4，連畫面字幕都讀得到。
+    video_delegate_model: str = "xiaomi/mimo-v2.6-flash"
 
     # **影片輸入按秒計費**：Gemini 預設每秒抽一格、每格約 260 token，所以
     # 300 秒約 78,000 token ≈ $0.023（flash-lite $0.30/M）。抽格那條路只花
@@ -243,9 +248,13 @@ class Settings(BaseSettings):
     # 這段描述。它只出現在當前這一則的提示裡（`media_note` 不落庫，見
     # chat.py），所以放寬不會令對話歷史膨脹。
     #
-    # max_tokens 放得比 max_chars 闊：這個端點要求一定要推理，推理 token
-    # 會**吃掉**這個額度，留太窄會連正文都寫唔完。
-    video_delegate_max_tokens: int = 1200
+    # max_tokens 要**放得很闊**，因為這個端點強制推理，而推理 token 會吃掉
+    # 這個額度。實測一條 5–6 秒的片：推理佔 780–930 token，正文再要約 250 字，
+    # 合共約 1150。所以設 1200 會在稍長的片上「想」到爆額、正文變空
+    # （實測 207KB 一條片就係咁死；加大到 4000 之後正常）。
+    #
+    # 推理 token 以輸出計價，所以這是實際成本 —— 但仍比原本的 gemini 便宜。
+    video_delegate_max_tokens: int = 4000
     video_delegate_max_chars: int = 900
 
     # 一輪最多外包幾條「引用串裡的」影片。每條最貴約兩仙美元，所以預設
