@@ -48,7 +48,9 @@ KNOBS: tuple[Knob, ...] = (
     ),
     Knob(
         "engine_mode", "search_engine_mode", str,
-        "引擎自身的分級｜fast 較便宜，留空用引擎預設（較貴）",
+        "引擎自身的分級｜fast 最便宜、turbo 中庸；"
+        "設成 - 代表留空（用引擎預設，最準但最貴）。"
+        "各引擎支援的分級不同，所以不寫死驗證",
     ),
     Knob("results_quick", "search_results_quick", int, "判斷說「一個事實就夠」時撈幾條"),
     Knob("results", "search_max_results", int, "一般情況撈幾條"),
@@ -66,12 +68,21 @@ _BY_KEY = {knob.key: knob for knob in KNOBS}
 _BY_FIELD = {knob.field: knob for knob in KNOBS}
 
 
+# Telegram 的指令參數不會帶空字串（空白會被切掉），所以「設成空」要用
+# 一個代表空的寫法。`-` 最直覺，另外接受 none / 空 / （空）。
+_EMPTY_TOKENS = {"-", "none", "空", "(空)", "（空）", "null"}
+
+
 def coerce(knob: Knob, raw: str) -> Any:
     """把使用者輸入的字串轉成該欄位的型別，並驗證。
 
     寧可報錯也不要靜靜接受 —— 打錯字而無效的設定比沒有設定更難查。
     """
     value = raw.strip()
+    # 「設成空」：說明寫「留空用引擎預設」，但指令的參數永遠不會是空字串，
+    # 所以要用一個代表空的寫法。以前沒有這個，於是說明講得到、做唔到。
+    if value.lower() in _EMPTY_TOKENS and knob.kind is str:
+        value = ""
     if knob.choices and value not in knob.choices:
         raise ValueError(f"{knob.key} 只能是 {'／'.join(knob.choices)}，收到 {value!r}")
     try:

@@ -280,6 +280,10 @@ cp config/persona.example.md config/persona.md
 /tune reset all            全部還原
 ```
 
+要設成空值（例如 `engine_mode` 留空＝用引擎預設）就填 `-`：
+`/tune set engine_mode -`。Telegram 的指令參數永遠不會是空字串，
+所以需要一個代表空的寫法；`none`、`空` 也可以。
+
 **三層優先順序**：`.env` 是基底 → 資料庫的覆寫疊在上面 → `/tune set` 即時改。
 `/tune reset` 刪掉覆寫，還原成 `.env` 的值。
 

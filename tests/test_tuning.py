@@ -47,6 +47,24 @@ def test_coerce_validates_choices_and_types():
         coerce(results, "好多")
 
 
+def test_empty_value_can_be_set():
+    """說明寫「留空用引擎預設」，指令就要真係做得到。
+
+    Telegram 的指令參數永遠不會是空字串（空白會被切掉），所以要用 `-`
+    這類代表空的寫法。以前沒有這個 —— 說明講得到、做唔到。
+    """
+    engine_mode = next(k for k in KNOBS if k.key == "engine_mode")
+    assert coerce(engine_mode, "-") == ""
+    assert coerce(engine_mode, "none") == ""
+    assert coerce(engine_mode, "空") == ""
+    assert coerce(engine_mode, "fast") == "fast"
+
+    # 只有 str 型別才接受這個寫法 —— 數值項填 `-` 應該報錯而不是變 0
+    results = next(k for k in KNOBS if k.key == "results")
+    with pytest.raises(ValueError):
+        coerce(results, "-")
+
+
 def test_set_then_load_reapplies_the_override():
     cfg = _cfg()
 
