@@ -3,7 +3,7 @@
 啟動方式：
     python -m dafeijing.router.main
 
-同大肥鯨嘅 `dafeijing.main` 一樣係 long polling，但**唔會自己打模型** ——
+同舊版嘅 `dafeijing.main` 一樣係 long polling（舊版喺 legacy-fatwhale branch），但**唔會自己打模型** ——
 對話交去 Hermes 嘅 API server，用 conversation 參數指定邊一條引用串。
 
 ⚠️ 同一時間只可以有一個 process 揸住同一個 bot token。Router 同大肥鯨
