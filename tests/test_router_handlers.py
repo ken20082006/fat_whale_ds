@@ -30,13 +30,22 @@ CONV_A = f"grp:{CHAT}:100"
 class FakeChain:
     """`conversations` 模擬 group_cache 入面本鯨嗰幾則回覆嘅對話名。"""
 
-    def __init__(self, conversations: dict[int, str] | None = None):
+    def __init__(
+        self,
+        conversations: dict[int, str] | None = None,
+        chain: list[dict] | None = None,
+    ):
         self._conversations = conversations or {}
+        self._chain = chain or []
         self.replies: list[dict] = []
         self.reply_updates: list[object] = []
 
     async def conversation_of(self, chat_id: int, message_id: int) -> str | None:
         return self._conversations.get(message_id)
+
+    async def resolve(self, chat_id: int, message_id: int) -> list[dict]:
+        """引用串，由舊到新（同 ReplyChain.resolve 一樣）。"""
+        return list(self._chain)
 
     async def cache_from_update(self, message) -> None:
         self.reply_updates.append(message)
@@ -120,16 +129,28 @@ def _message(
     return message
 
 
+def _reply_stub(message_id: int, user_id: int, name: str, text=None):
+    """被引用嗰則。要連媒體屬性 —— pick_file() 直接讀佢哋。"""
+    return SimpleNamespace(
+        message_id=message_id,
+        from_user=SimpleNamespace(id=user_id, full_name=name),
+        text=text,
+        caption=None,
+        sticker=None,
+        animation=None,
+        video=None,
+        video_note=None,
+        photo=None,
+        document=None,
+    )
+
+
 def _reply_to_bot(message_id: int = 9001):
-    return SimpleNamespace(
-        message_id=message_id, from_user=SimpleNamespace(id=BOT_ID, full_name="大肥鯨")
-    )
+    return _reply_stub(message_id, BOT_ID, "大肥鯨")
 
 
-def _reply_to_user(message_id: int = 300, user_id: int = OTHER_USER):
-    return SimpleNamespace(
-        message_id=message_id, from_user=SimpleNamespace(id=user_id, full_name="用戶2")
-    )
+def _reply_to_user(message_id: int = 300, user_id: int = OTHER_USER, text=None):
+    return _reply_stub(message_id, user_id, "用戶2", text=text)
 
 
 def _context(svc, bot: FakeBot | None = None):
@@ -487,11 +508,14 @@ def test_unknown_sticker_number_sends_nothing_and_does_not_crash():
     assert bot.sent[0][1] == "好"
 
 
+
 # ── 存取閘 ──────────────────────────────────────────────
+#
+# 大肥鯨嘅規則：**群組靠「管理員在唔在個群」，唔逐個人查；私聊靠邀請碼。**
+# 呢個分野要跟返 —— 喺群組加個人閘會令群友全部冇反應。
 
 
 def _gate_svc(hermes, *, active: bool, admin: bool):
-    """砌一個可以控制「啟用咗未」同「係咪管理員」嘅 services。"""
     svc = _services(FakeChain(), hermes)
     svc.is_admin = lambda _uid: admin
 
@@ -505,35 +529,25 @@ def _gate_svc(hermes, *, active: bool, admin: bool):
     return svc
 
 
-def test_unauthorised_user_gets_no_reply_and_costs_nothing():
-    """**冇呢道閘，任何知 bot username 嘅人都燒得起你嘅錢。**"""
+def test_group_member_is_served_even_when_not_active():
+    """**大肥鯨冇喺群組擋人。** 佢嘅閘係 group_usable（管理員在場），
+    唔係逐個人嘅邀請碼狀態。加咗個人閘會令群友全部冇反應。"""
     hermes = FakeHermes()
-    bot = FakeBot()
-    message = _message(message_id=500, bot=bot)
-    _run_group(message, _gate_svc(hermes, active=False, admin=False), bot)
+    _run_group(_message(message_id=500), _gate_svc(hermes, active=False, admin=False))
 
-    assert hermes.calls == [], "唔應該叫 Hermes"
-    assert bot.sent == [], "連拒絕都唔應該回 —— 免得變成回音壁"
+    assert len(hermes.calls) == 1, "群友應該照用得到"
 
 
-def test_active_user_is_allowed():
+def test_group_member_uses_the_group_scope_for_notes():
+    """群友冇用戶列都要讀得到筆記（大肥鯨會即場 ensure 一列）。"""
     hermes = FakeHermes()
-    _run_group(
-        _message(message_id=500), _gate_svc(hermes, active=True, admin=False)
-    )
-    assert len(hermes.calls) == 1
+    _run_group(_message(message_id=500), _gate_svc(hermes, active=False, admin=False))
+
+    assert hermes.calls[0][0] == f"grp:{CHAT}:500"
 
 
-def test_admin_is_allowed_even_when_not_active():
-    """管理員唔應該被自己個閘鎖住喺外面。"""
-    hermes = FakeHermes()
-    _run_group(
-        _message(message_id=500), _gate_svc(hermes, active=False, admin=True)
-    )
-    assert len(hermes.calls) == 1
-
-
-def test_private_message_from_a_stranger_is_ignored():
+def test_a_stranger_dm_is_ignored():
+    """私聊跟大肥鯨 —— 未啟用嘅人入唔到嚟。"""
     hermes = FakeHermes()
     bot = FakeBot()
     message = _message(chat_type=ChatType.PRIVATE, message_id=1, bot=bot)
@@ -548,5 +562,174 @@ def test_private_message_from_a_stranger_is_ignored():
         )
     )
 
-    assert hermes.calls == []
-    assert bot.sent == []
+    assert hermes.calls == [], "唔應該叫 Hermes"
+    assert bot.sent == [], "連拒絕都唔應該回 —— 免得變成回音壁"
+
+
+def test_an_active_user_can_dm():
+    hermes = FakeHermes()
+    _run_private_dm(_gate_svc(hermes, active=True, admin=False))
+    assert len(hermes.calls) == 1
+
+
+def test_the_admin_can_dm_even_when_not_active():
+    """管理員唔應該被自己個閘鎖住喺外面。"""
+    hermes = FakeHermes()
+    _run_private_dm(_gate_svc(hermes, active=False, admin=True))
+    assert len(hermes.calls) == 1
+
+
+def _run_private_dm(svc):
+    bot = FakeBot()
+    message = _message(chat_type=ChatType.PRIVATE, message_id=1, bot=bot)
+    asyncio.run(
+        on_private_message(
+            SimpleNamespace(
+                effective_message=message, effective_user=message.from_user
+            ),
+            SimpleNamespace(bot_data={"services": svc}, bot=bot),
+        )
+    )
+
+
+# ── 引用串：要成條，而且次序要啱 ────────────────────────
+
+
+def _entry(message_id: int, user_id: int, name: str, text: str) -> dict:
+    return {
+        "message_id": message_id,
+        "user_id": user_id,
+        "display_name": name,
+        "text": text,
+    }
+
+
+def test_whole_chain_is_included_not_just_the_last_one():
+    """用戶報嗰個：引用 @本鯨嗰時只睇到最尾嗰則。要成條串先夠。"""
+    chain = [
+        _entry(1, 111, "甲", "第一句"),
+        _entry(2, 222, "乙", "第二句"),
+        _entry(3, 333, "丙", "第三句"),
+        _entry(500, USER_ID, "陳大文", "我嘅回應"),  # 觸發嗰則
+    ]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert "第一句" in body, "唔可以只附最尾嗰則"
+    assert "第二句" in body
+    assert "第三句" in body
+
+
+def test_chain_is_in_chronological_order():
+    """**次序唔可以亂** —— 亂咗因果會調轉，模型會當乙講嘅嘢早過甲。"""
+    chain = [
+        _entry(1, 111, "甲", "最早嗰句"),
+        _entry(2, 222, "乙", "中間嗰句"),
+        _entry(3, 333, "丙", "最尾嗰句"),
+        _entry(500, USER_ID, "陳大文", "我嘅回應"),
+    ]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert body.index("最早嗰句") < body.index("中間嗰句") < body.index("最尾嗰句")
+    assert body.index("最尾嗰句") < body.index("我嘅回應")
+
+
+def test_every_chain_message_keeps_its_speaker():
+    """一條串幾個人 —— 每則都要標返邊個講。"""
+    chain = [
+        _entry(1, 111, "甲", "甲講嘅"),
+        _entry(2, 222, "乙", "乙講嘅"),
+        _entry(500, USER_ID, "陳大文", "我嘅回應"),
+    ]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(2)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert "[甲|111]" in body
+    assert "[乙|222]" in body
+
+
+def test_the_trigger_is_not_duplicated():
+    chain = [_entry(1, 111, "甲", "舊句"), _entry(500, USER_ID, "陳大文", "我嘅回應")]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(1)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert body.count("我嘅回應") == 1, "觸發嗰句會另外送，唔好喺串入面再嚟一次"
+
+
+def test_elision_marker_gets_no_speaker():
+    """`resolve()` 摺疊中段插嘅標記唔係真訊息，唔應該標發言者。"""
+    chain = [
+        _entry(1, 111, "甲", "開頭"),
+        {"message_id": -1, "user_id": None, "display_name": None, "text": "……（中間省略 5 則）"},
+        _entry(3, 333, "丙", "收尾"),
+        _entry(500, USER_ID, "陳大文", "我嘅回應"),
+    ]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert "中間省略 5 則" in body
+    assert "[None|" not in body
+
+
+def test_media_only_chain_entries_are_skipped():
+    chain = [
+        {"message_id": 1, "user_id": 111, "display_name": "甲", "text": ""},
+        _entry(2, 222, "乙", "有字"),
+        _entry(500, USER_ID, "陳大文", "我嘅回應"),
+    ]
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(2)),
+        _services(FakeChain(chain=chain), hermes),
+    )
+
+    assert "有字" in hermes.calls[0][1]
+
+
+def test_falls_back_to_the_immediate_parent_when_the_cache_misses():
+    """重啟之後第一次見到 —— 快取追唔到，至少附返最尾嗰則。"""
+    hermes = FakeHermes()
+    parent = _reply_to_user(message_id=300, text="快取冇嘅一句")
+    _run_group(
+        _message(text="你覺得點", message_id=950, reply_to=parent),
+        _services(FakeChain(chain=[]), hermes),
+    )
+
+    assert "快取冇嘅一句" in hermes.calls[0][1]
+
+
+def test_quoting_the_bot_attaches_no_chain():
+    """續同一條對話 —— Hermes 歷史已經有齊，再送會重複。"""
+    chain = [_entry(1, 111, "甲", "久遠嗰句"), _entry(9001, BOT_ID, "大肥鯨", "本鯨答過")]
+    hermes = FakeHermes()
+    parent = _reply_to_bot(9001)
+    parent.text = "本鯨答過"
+    _run_group(
+        _message(text="咁你覺得點", message_id=950, reply_to=parent),
+        _services(FakeChain({9001: CONV_A}, chain=chain), hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert "久遠嗰句" not in body
+    assert "本鯨答過" not in body

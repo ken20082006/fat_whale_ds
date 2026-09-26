@@ -121,6 +121,9 @@ class FakeChain:
     async def conversation_of(self, chat_id, message_id):
         return None
 
+    async def resolve(self, chat_id, message_id):
+        return []
+
     async def cache_from_update(self, message):
         return None
 

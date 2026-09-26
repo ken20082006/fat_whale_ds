@@ -34,6 +34,7 @@ from .hermes import HermesError
 from .images import collect_images
 from .memory import with_notes
 from .stickers import menu_block, split_marker
+from .videos import save_video, video_note
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,8 @@ async def _body_for(
     user,
     *,
     is_group: bool,
-    note: str | None = None,
+    extras: list[str] | None = None,
+    quoted: str | None = None,
     with_stickers: bool = False,
 ) -> tuple[str, str, str]:
     """回傳 (送去 Hermes 嘅文字, scope, 訊息原文)。
@@ -61,18 +63,20 @@ async def _body_for(
     **筆記係 per-user 嘅**：以 `user_id` + scope 分開，所以同一個群入面
     甲嘅筆記唔會出現喺乙度。Hermes 嗰邊做唔到呢件事（`USER.md` 係全域）。
 
-    `note` 係媒體描述（真 GIF，見 router/gif.py），附喺訊息後面送去 Hermes。
-    **但回傳嘅第三個值係原文** —— 抽筆記一定要用原文，唔可以連媒體描述
-    一齊抽。大肥鯨嘅血淚規則：`media_note` 唔可以落庫，落咗下一輪歷史就
-    多一段，模型會當成自己講過嘅嘢。
+    `extras` 係附喺訊息後面嘅媒體標註（真 GIF 嘅描述、影片嘅檔案路徑）。
+    `quoted` 係被引用嗰則嘅內容（見 `_quoted_block`），排喺最前面 ——
+    冇佢嘅話，對方引用一句嘢再 @ 本鯨，本鯨完全唔知引用緊乜。
+
+    **回傳嘅第三個值係原文** —— 抽筆記一定要用原文，唔可以連引用同媒體
+    標註一齊抽。大肥鯨嘅血淚規則：`media_note` 唔可以落庫，落咗下一輪
+    歷史就多一段，模型會當成自己講過嘅嘢。
     """
     raw = message.text or message.caption or ""
     scope = scope_for(is_group, message.chat_id)
     notes = await svc.sessions.notes(user.id, scope)
 
-    shown = raw
-    if note:
-        shown = f"{raw}\n\n[這一則嘅內容 {note}]" if raw else f"[這一則嘅內容 {note}]"
+    pieces = [quoted, raw, *(extras or [])]
+    shown = "\n\n".join(piece for piece in pieces if piece)
 
     body = attribute(user.full_name, user.id, shown)
     if with_stickers:
@@ -81,6 +85,93 @@ async def _body_for(
             body = f"{sticker_menu}\n\n{body}"
 
     return with_notes(body, notes), scope, raw
+
+
+async def _quoted_block(svc, message) -> str | None:
+    """新開對話嗰陣，附上**成條引用串**（由舊到新）。冇引用就回 None。
+
+    **要成條，唔係淨係最尾嗰則。** 引用鏈係一層一層疊上去嘅：
+
+        本鯨答過 → 甲引用本鯨 → 乙引用甲 → 丙引用乙再 @本鯨
+
+    丙觸發嗰陣，佢開緊一條**新對話**（引用嘅係乙，唔係本鯨）——
+    Hermes 嗰邊乜都冇，所以成條串都要送去，而且**次序要跟返**，
+    唔係嘅話因果會調轉（變成乙講嘅嘢早過甲）。
+
+    **引用本鯨就唔使附** —— 嗰個係「續同一條對話」，Hermes 歷史已經有
+    成條串（每則觸發訊息都送過），再送只會令佢見到自己講過嘅嘢重複。
+    """
+    parent = message.reply_to_message
+    if parent is None:
+        return None
+
+    sender = getattr(parent, "from_user", None)
+    if sender is not None and sender.id == svc.bot_id:
+        return None
+
+    # 由觸發嗰則往上追到串根，再排返由舊到新。
+    chain = await svc.chain.resolve(message.chat_id, message.message_id)
+    blocks: list[str] = []
+    for entry in chain:
+        # 最後一則就係觸發嗰句自己 —— 佢會另外送，唔好重複。
+        if entry.get("message_id") == message.message_id:
+            continue
+        text = (entry.get("text") or "").strip()
+        if not text:
+            continue  # 純媒體嘅一則，文字冇嘢好附（圖另外送）
+        if entry.get("message_id") == -1:
+            # `resolve()` 摺疊中段時插嘅標記，唔係真訊息，冇發言者。
+            blocks.append(text)
+            continue
+        blocks.append(
+            attribute(
+                entry.get("display_name"),
+                entry.get("user_id") or "?",
+                text,
+            )
+        )
+
+    if blocks:
+        return "\n\n".join(blocks)
+
+    # 快取追唔到（例如重啟之後第一次見到）：至少附返最尾嗰則。
+    text = (parent.text or parent.caption or "").strip()
+    if not text:
+        return None
+    name = getattr(sender, "full_name", None) if sender is not None else None
+    return attribute(name, getattr(sender, "id", None) or "?", text)
+
+
+async def _collect_all_images(bot, message, svc) -> list[str]:
+    """今則嘅圖 + 被引用嗰則嘅圖。
+
+    被引用嗰則嘅圖要一齊送 —— 對方引用一張圖問「呢張點」嗰時，
+    只送文字嘅話本鯨係盲嘅。
+    """
+    images = await collect_images(bot, message, svc)
+    parent = message.reply_to_message
+    # 引用本鯨自己嗰則唔使再送（佢嘅圖 Hermes 早就見過）。
+    if parent is not None and not _replies_to_bot(message, svc.bot_id):
+        images += await collect_images(bot, parent, svc)
+    return images
+
+
+async def _media_extras(bot, message, svc) -> list[str]:
+    """呢則訊息嘅媒體標註 —— 真 GIF 嘅描述、影片嘅檔案路徑。
+
+    兩者只會有一個（一則訊息得一個媒體）。都冇就回空 list。
+    """
+    extras: list[str] = []
+
+    gif = await gif_note(bot, message, svc)
+    if gif:
+        extras.append(f"[這一則嘅內容 {gif}]")
+
+    path = await save_video(bot, message, svc)
+    if path:
+        extras.append(video_note(path))
+
+    return extras
 
 
 def _replies_to_bot(message, bot_id: int) -> bool:
@@ -193,15 +284,14 @@ async def _deliver(
         )
 
 
-async def _allowed(svc, user) -> bool:
-    """呢個人用得唔用得。
+async def _allowed_private(svc, user) -> bool:
+    """私聊用唔用得。
 
-    **一定要有呢道閘。** Router 每則訊息都要 Hermes 行一次（實測 11k input
-    tokens），冇閘嘅話任何知道 bot username 嘅人都燒得起你嘅錢。
+    跟返大肥鯨 `bot/private.py:32`：只認管理員同已啟用嘅人（邀請碼）。
+    其他人靜靜哋唔應 —— 連一句拒絕都唔回，免得變成騷擾對象嘅回音壁。
 
-    大肥鯨原本靠邀請碼（`/start DFJ-XXXX`）；Router 未搬指令，所以只認
-    管理員同已啟用嘅人。其他人靜靜哋唔應 —— 連一句拒絕都唔回，
-    免得變成騷擾對象嘅回音壁。
+    **群組唔用呢道閘。** 大肥鯨嘅群組規則係「管理員在唔在個群」
+    （`group_usable`），唔會逐個人查 —— 加咗嘅話會擋晒群友。
     """
     if svc.is_admin(user.id):
         return True
@@ -220,9 +310,9 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not is_addressed_to_bot(message, svc):
         return
-    if not await _allowed(svc, user):
-        logger.info("群組訊息：%s 未獲授權，唔應", user.id)
-        return
+    # **群組唔查個人授權。** 大肥鯨嘅規則係「管理員在唔在個群」
+    # （上面嗰個 group_usable 已經查咗），唔會逐個人擋 ——
+    # 加咗嘅話會令群友全部冇反應，而佢哋本來用得。
 
     allowed, wait = svc.limiter.check(user.id)
     if not allowed:
@@ -239,16 +329,17 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await svc.chain.cache_from_update(message.reply_to_message)
 
     conversation = await _conversation_for(svc, message)
-    # 真 GIF 由 Router 自己睇（Hermes 收唔到 —— 見 router/gif.py）。
-    note = await gif_note(context.bot, message, svc)
-    # 靜態圖（相片、貼圖）轉發去 Hermes 嘅 vision。
-    images = await collect_images(context.bot, message, svc)
+    # 媒體：真 GIF 由 Router 自己睇、影片落檔交畀 Hermes、
+    # 靜態圖轉發去 vision。三者都喺 router/ 入面各自一個模組。
+    extras = await _media_extras(context.bot, message, svc)
+    images = await _collect_all_images(context.bot, message, svc)
     body, scope, raw = await _body_for(
         svc,
         message,
         user,
         is_group=True,
-        note=note,
+        extras=extras,
+        quoted=await _quoted_block(svc, message),
         with_stickers=needs_sticker_menu(svc, conversation),
     )
 
@@ -274,7 +365,7 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     svc = get_services(context)
 
-    if not await _allowed(svc, user):
+    if not await _allowed_private(svc, user):
         logger.info("私聊：%s 未獲授權，唔應", user.id)
         return
 
@@ -289,14 +380,15 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     thread_id = getattr(message, "message_thread_id", None)
     conversation = dm_conversation(message.chat_id, thread_id)
-    note = await gif_note(context.bot, message, svc)
-    images = await collect_images(context.bot, message, svc)
+    extras = await _media_extras(context.bot, message, svc)
+    images = await _collect_all_images(context.bot, message, svc)
     body, scope, raw = await _body_for(
         svc,
         message,
         user,
         is_group=False,
-        note=note,
+        extras=extras,
+        quoted=await _quoted_block(svc, message),
         with_stickers=needs_sticker_menu(svc, conversation),
     )
 

@@ -168,6 +168,18 @@ class Settings(BaseSettings):
     hermes_url: str = "http://127.0.0.1:8642"
     hermes_key: str = ""
 
+    # 影片轉發用。Hermes 嘅 `video_analyze` 要一個**佢讀得到嘅路徑**，
+    # 唔收 data URL（`input_file` 會 400），所以 Router 要落一個檔。
+    #
+    # Router 跑喺主機、Hermes 跑喺容器，同一個檔有兩個路徑：
+    #   hermes_media_dir      —— 主機寫入（相對於 fat_whale_ds 嘅 CWD）
+    #   hermes_media_prefix   —— 容器讀取（喺提示度話畀模型知）
+    #
+    # 預設值啱啱好：hermes_ds 掛咗 `./data:/opt/data`，所以喺 data 底下
+    # 寫就兩邊都見到。改咗 Hermes 嘅掛載就要跟住改。
+    hermes_media_dir: Path = Path("../hermes_ds/data/cache/videos")
+    hermes_media_prefix: str = "/opt/data/cache/videos"
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")
