@@ -21,7 +21,7 @@ Telegram → Router（呢個 repo）→ Hermes API → 回覆
 係「每人一條、冇 TTL」，做唔到「每條引用串一條對話」；plugin 又係
 observer-only，冇 hook 位改。所以由外面控制 `conversation` 個名。
 
-**完整設計同踩過嘅坑**：`C:\ds\hermes_ds\ARCHITECTURE.md`
+**完整設計同踩過嘅坑**：`C:\dsat_whale_ds\hermes\ARCHITECTURE.md`
 
 **舊版（純大肥鯨，自己打 OpenRouter）**：`legacy-fatwhale` branch。
 
@@ -94,7 +94,7 @@ observer-only，冇 hook 位改。所以由外面控制 `conversation` 個名。
 
 ### 2. 起 Hermes
 
-Hermes 係個腦，要另外起。見 `C:\ds\hermes_ds\`：
+Hermes 係個腦，要另外起。見 `C:\dsat_whale_ds\hermes\`：
 
 ```bash
 cd hermes_ds
@@ -256,7 +256,7 @@ Bot API **沒有**「依 message_id 取訊息」的方法，`reply_to_message` �
 
 ## 部署
 
-Router 跑喺**主機**（唔係容器），因為佢要寫檔落 `hermes_ds/data/`
+Router 跑喺**主機**（唔係容器），因為佢要寫檔落 `hermes/data/`
 （影片轉發）。Hermes 就跑喺 Docker。
 
 | 檔案 | 入 git？ | 為咩 |
@@ -348,7 +348,7 @@ python scripts/backup.py
 **安全界線喺邊**：舊版有一節寫死喺 `core/persona.py` 嘅安全規則，
 同輸出側嘅洩漏檢查（`core/security.py`，40 字逐字重疊就攔）。Router
 **唔用呢兩樣** —— 防線搬咗去 Hermes 嗰邊，加上 `SOUL.md` 嘅「安全界線」
-一節（由 `hermes_ds/build_soul.py` 生成，同舊版同一份文字）。
+一節（由 `hermes/build_soul.py` 生成，同舊版同一份文字）。
 
 ---
 
@@ -389,7 +389,7 @@ dafeijing/
 
 **要睇舊版**：`legacy-fatwhale` branch（純大肥鯨，自己打 OpenRouter）。
 
-人設規則（長度、媒體、安全界線）搬咗去 `hermes_ds/persona_rules.py`，
+人設規則（長度、媒體、安全界線）搬咗去 `hermes/persona_rules.py`，
 由 `build_soul.py` 讀 —— SOUL.md 完全由 `hermes_ds` 話事，唔使隔一個 repo 借。
 
 設計原則：人設喺 `SOUL.md`（Hermes 側），同程式碼完全解耦；

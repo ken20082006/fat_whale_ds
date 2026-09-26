@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     maintenance_notice_cooldown_seconds: int = 600
 
     # ── Router（大肥鯨外殼 + Hermes 腦）──────────────────
-    # 設計見 C:\ds\hermes_ds\ARCHITECTURE.md。
+    # 設計見 hermes/ARCHITECTURE.md。
     #
     # Router 唔再自己打 OpenRouter，而係將對話交去 Hermes 嘅 API server，
     # 用 conversation 參數指定「邊一條引用串」。所以金鑰要嘅係 Hermes
@@ -175,9 +175,9 @@ class Settings(BaseSettings):
     #   hermes_media_dir      —— 主機寫入（相對於 fat_whale_ds 嘅 CWD）
     #   hermes_media_prefix   —— 容器讀取（喺提示度話畀模型知）
     #
-    # 預設值啱啱好：hermes_ds 掛咗 `./data:/opt/data`，所以喺 data 底下
+    # 預設值啱啱好：hermes 掛咗 `./data:/opt/data`，所以喺 data 底下
     # 寫就兩邊都見到。改咗 Hermes 嘅掛載就要跟住改。
-    hermes_media_dir: Path = Path("../hermes_ds/data/cache/videos")
+    hermes_media_dir: Path = Path("hermes/data/cache/videos")
     hermes_media_prefix: str = "/opt/data/cache/videos"
 
     # 成本估算（美元／百萬 token）。

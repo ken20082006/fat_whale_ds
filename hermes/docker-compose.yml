@@ -1,0 +1,35 @@
+services:
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+
+    # gateway run 由 s6-overlay 監管：掛咗兩秒內自己起返，唔使整個容器重啟。
+    # 呢個係官方 image 嘅預設行為，唔使額外設定。
+    command: ["gateway", "run"]
+
+    # 所有狀態（config、金鑰、session、技能、記憶）都喺呢一個目錄。
+    # image 本身係無狀態 —— 更新就係 pull 一個新 image，唔會唔見嘢。
+    volumes:
+      - ./data:/opt/data
+
+    # Router 要經呢個 port 入嚟。**只綁 127.0.0.1** —— 唔好開出公網。
+    # API_SERVER_KEY 已經係一道閘，但冇必要嘅話就唔好露個 port 出去。
+    #
+    # 如果 Router 之後都係跑喺 Docker，可以改用同一個 network 直接
+    # 用 service name（hermes:8642），唔使經 host port。
+    ports:
+      - "127.0.0.1:8642:8642"
+
+    environment:
+      # 只影響日誌顯示。session 時間戳一律 UTC。
+      - TZ=${TZ:-Asia/Hong_Kong}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ⚠️ Docker 版**唔支援 `hermes update`** —— 更新係 pull 新 image 再 up：
+#     docker compose pull && docker compose up -d

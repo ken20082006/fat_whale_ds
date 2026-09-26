@@ -9,7 +9,7 @@ Router 跑喺主機、Hermes 跑喺容器，所以同一個檔有兩個路徑：
     主機寫入  `<FW_HERMES_MEDIA_DIR>/abc.mp4`
     容器讀取  `<FW_HERMES_MEDIA_PREFIX>/abc.mp4`
 
-`hermes_ds/data` 掛咗做 `/opt/data`，所以喺 data 底下寫就兩邊都見到。
+`hermes/data` 掛咗做 `/opt/data`，所以喺 data 底下寫就兩邊都見到。
 
 **邊個負責睇**：模型自己叫 `video_analyze`（Hermes 側已經開好，而且
 `auxiliary.vision.model` 指咗去 `bytedance-seed/seed-2.0-mini`）。

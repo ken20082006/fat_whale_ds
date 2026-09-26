@@ -1,0 +1,136 @@
+# Hermes Agent 設定 —— 大肥鯨遷移
+#
+# 只放**非機密**設定。金鑰同 bot token 一律喺 .env（見 data/.env）。
+# 規則：secrets 去 .env，其餘去呢個檔。
+
+# 同大肥鯨同一個模型。Provider 唔使寫死 —— Hermes 見到
+# OPENROUTER_API_KEY 就自動判定係 OpenRouter（`hermes status` 會顯示）。
+model: deepseek/deepseek-v4.1-flash
+
+platforms:
+  telegram:
+    # ⚠️ **一定要係 false。**
+    #
+    # Hermes 而家只做腦 —— 對話由 Router（fat_whale_ds/dafeijing/router）
+    # 經 API server 送入嚟，Telegram 由 Router 揸。
+    #
+    # 兩邊一齊 polling 同一個 token 會 409，而且 Hermes 會**主動踢走**
+    # 爭 getUpdates 嘅對手（官方文件："Conflict recovery still drops pending
+    # updates to terminate the competing getUpdates session"）。
+    #
+    # 呢個 key 係 authoritative —— 環境變數蓋唔過佢。
+    #
+    # 原本喺度嘅 require_mention / observe_unmentioned_group_messages /
+    # allowed_chats / group_allowed_chats / dm_topics 全部拆走咗 ——
+    # 嗰啲係「用 Hermes 自己個 gateway」先有用，而家 Router 自己實現咗
+    # （引用串分對話、@ 判定、群組可用性 = 管理員在場）。
+    enabled: false
+
+    # 留住：Hermes 送 cron 結果同主動訊息時用。Telegram 關咗就暫時冇用，
+    # 但他日若果要開返 Hermes 自己個 gateway，呢個唔使重新查。
+    home_channel:
+      platform: telegram
+      chat_id: '-5303991392'
+      name: test bot
+      user_id: '216587605'
+
+_config_version: 46
+onboarding:
+  seen:
+    busy_input_prompt: true
+agent:
+  # 唔要思考。大肥鯨係角色扮演助手，唔係專業 AI —— 要答得快。
+  # ⚠️ 一定要加引號：`none` 唔引號會被當成 YAML null（= 未設定），
+  # 咁就會 fallback 去預設（思考開啟）。要寫成字串 "none" 才係「關掉思考」。
+  # （`hermes config set agent.reasoning_effort none` 會寫成 null，唔好用。）
+  reasoning_effort: "none"
+display:
+  # 移除思考過程貼出。冇思考就冇嘢好貼，而且大肥鯨原本嗰個
+  # expandable blockquote 功能決定唔帶過嚟。
+  show_reasoning: false
+platform_toolsets:
+  cli:
+    - memory
+    - skills
+    - video
+    - vision
+    - web
+  api_server:
+    - memory
+    - skills
+    - video
+    - vision
+    - web
+known_plugin_toolsets:
+  cli:
+    - a2a
+    - spotify
+  api_server:
+    - a2a
+    - spotify
+known_builtin_toolsets:
+  cli:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - connections
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - session_search
+    - skills
+    - spotify
+    - stt
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search
+    - yuanbao
+  api_server:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - connections
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - session_search
+    - skills
+    - spotify
+    - stt
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search
+    - yuanbao
+auxiliary:
+  video:
+    model: bytedance-seed/seed-2.0-mini
+    provider: openrouter
+  vision:
+    model: bytedance-seed/seed-2.0-mini
+    provider: openrouter

@@ -1,0 +1,17 @@
+# Hermes 嘅狀態全部喺 data/ 入面，但唔係全部想入 git。
+
+# 金鑰、bot token —— 永遠唔入
+data/.env
+data/auth.json
+
+# Session、記憶、技能、排程 —— 會隨使用不斷變，入 git 只會製造噪音同衝突
+data/sessions/
+data/memories/
+data/skills/
+data/cron/
+data/logs/
+data/images/
+data/cache/
+
+# 其餘（SOUL.md、config.yaml）刻意保留喺 git：
+# 佢哋係設定，兩部電腦要靠 git 同步。見記憶「改完就 commit 並 push」。

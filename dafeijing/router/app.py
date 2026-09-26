@@ -125,6 +125,17 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     （大肥鯨都係咁做：曾經有個影片貼圖令 `pick_file()` 拋
     AttributeError，結果群組每個貼圖都換嚟一句「本鯨栽了一下」。）
     """
+    # Telegram 嘅網路抖動（`get_updates` 連唔到）係 PTB **自己會重試**嘅
+    # 正常情況 —— 寫成頁 traceback 只會將日誌灌爆，而且冇嘢可以做。
+    # 實測：家用網路一個抖動就寫咗 140 行。
+    #
+    # 只喺呢一種情況降級；其他錯誤照樣出 traceback。
+    from telegram.error import NetworkError
+
+    if isinstance(context.error, NetworkError) and update is None:
+        logger.warning("Telegram 連線抖動（PTB 會自動重試）：%s", context.error)
+        return
+
     logger.error("Router 出事", exc_info=context.error)
     svc: RouterServices | None = None
     try:

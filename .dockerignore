@@ -20,3 +20,7 @@ deploy/
 *.md
 !README.md
 # scripts/ 不可以排除 —— Dockerfile 會 COPY 它，排除會讓建置失敗
+
+# Hermes Agent 嘅家（SOUL.md、config、session…）—— 同大肥鯨個 image 無關
+# 唔排除嘅話會將成個 Hermes 資料目錄（~100MB）送入 build context
+hermes/

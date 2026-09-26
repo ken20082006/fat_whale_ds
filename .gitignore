@@ -14,7 +14,9 @@ config/persona.md
 assets/
 
 # 執行期資料
-data/
+# `/data/` 要錨定喺根 —— 唔錨定嘅話會連 `hermes/data/` 都食埋，
+# 而嗰度有 SOUL.md 同 config.yaml 要入版控。
+/data/
 logs/
 backups/
 *.db
@@ -25,3 +27,15 @@ backups/
 .idea/
 .vscode/
 .DS_Store
+# ── hermes/（Hermes Agent 嘅家）──────────────────────
+#
+# **只追兩個設定檔**：SOUL.md（人設）同 config.yaml（模型、工具、思考開關）。
+# 其餘一律唔追 —— Hermes 個 data/ 有大量執行期狀態（sessions、memories、
+# skills、cache、.local/、locks、backups…），入版控只會製造噪音同衝突。
+#
+# 兩部電腦靠 git 同步人設同設定，靠呢兩個檔就夠。
+hermes/data/*
+!hermes/data/SOUL.md
+!hermes/data/config.yaml
+
+hermes/__pycache__/
