@@ -47,10 +47,14 @@ class Settings(BaseSettings):
 
     # ── 模型 ──
     # 預設用 v4.1-flash 而不是舊的 deepseek-chat：更便宜（$0.14/$0.42 對
-    # $0.32/$0.89）、上下文大 6 倍（100 萬對 16 萬）、而且**支援圖片**。
-    # 舊預設不吃圖，`.env` 一旦遺失或換機重建，視覺能力會靜靜失效。
+    # $0.32/$0.89）、上下文大 6 倍（100 萬對 16 萬）。
+    #
+    # ⚠️ Router 而家唔用呢個 model 答嘢 —— 對話交畀 Hermes。佢淨低嘅用途係
+    # **用量紀錄嗰個標籤**（`router/handlers.py` 寫入 usage 表，`/cost` 靠佢）。
+    #
+    # 以前仲有個 `model_vision`：靜態圖要另揀一個吃得到圖嘅 model。而家
+    # 圖片直接交畀 Hermes，冇人再讀嗰個設定 —— 已刪（2026-09-26）。
     model: str = "deepseek/deepseek-v4.1-flash"
-    model_vision: str = "deepseek/deepseek-v4.1-flash"
     model_utility: str = "deepseek/deepseek-v4.1-flash"
 
     # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。

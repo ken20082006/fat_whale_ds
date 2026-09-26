@@ -2,6 +2,11 @@
 
 2026-09-26 定案。大肥鯨唔係「被 Hermes 取代」，而係**拆剩個殼做 router，換個腦**。
 
+> **2026-09-26 晚更新**：呢份文件原本只講大肥鯨一隻 bot。
+> 而家係**兩隻 bot 共用同一份 Router 代碼**（大肥鯨 ＋ 貝爾法斯特），
+> 成套嘢收埋喺 repo 根**一個 `docker-compose.yml`**、四個 service。
+> 見下面「架構」。貝爾法斯特嘅人設層喺 [`../belfast/`](../belfast/README.md)。
+
 ## 為什麼要 router
 
 Hermes 嘅 session key 係 `agent:main:telegram:group:<chat_id>:<thread_id>`，
@@ -16,33 +21,50 @@ handles or platform actions"*，`pre_command` 更寫明 *"returns IGNORED in v1"
 
 ## 架構
 
+**四個 service，一個 compose**（repo 根 `docker-compose.yml`）——
+兩個腦 ＋ 兩個外殼，同一個 network，Router 用 service name 叫 Hermes：
+
+```
+Telegram ──┬─► router ────► hermes   ┐
+           │   (外殼)       (腦)      │
+           └─► router-belfast ─► belfast ┴─► OpenRouter / xAI
+               (外殼)          (腦)
+```
+
 ```
 Telegram
    │
    ▼
-┌─────────────────────────────────────┐
-│  Router（大肥鯨拆剩嘅殼）              │
-│  • Telegram polling / 授權 / 節流     │
-│  • 解析引用串 → 搵到串根               │
-│  • conversation = grp:<chat_id>:<串根>│
-│  • 逐句標註 [名|user_id]              │
-│  • 注入當前發言者嘅 per-user 筆記      │
-│  • 真 GIF 例外處理                    │
-└──────────┬──────────────────────────┘
-           │  POST 127.0.0.1:8642/v1/responses
+┌─────────────────────────────────────┐     ┌─────────────────────────────────────┐
+│  router（大肥鯨拆剩嘅殼）             │     │  router-belfast（同一份代碼）         │
+│  • Telegram polling / 授權 / 節流     │     │  • 同上，但完全獨立嘅一套設定          │
+│  • 解析引用串 → 搵到串根               │     │  • bot token / DB / log / 媒體目錄    │
+│  • conversation = grp:<chat_id>:<串根>│     │    一律分開 —— 兩隻 bot 唔可以互相繼承 │
+│  • 逐句標註 [名|user_id]              │     │  • 角色名由 FW_SELF_NAME 帶入         │
+│  • 注入當前發言者嘅 per-user 筆記      │     │    （見 settings.self_name）          │
+│  • 落媒體檔（真 GIF 先轉 MP4）         │     │                                      │
+└──────────┬──────────────────────────┘     └──────────┬──────────────────────────┘
+           │  POST http://hermes:8642/v1/responses      │  POST http://belfast:8642/...
            │  {"input": "...", "conversation": "grp:..."}
-           ▼
-┌─────────────────────────────────────┐
-│  Hermes（腦）                         │
-│  • SOUL.md 人設                      │
-│  • 每個 conversation 一條獨立歷史      │
-│  • web search / vision / video_analyze│
-│  • 模型呼叫                          │
-└──────────┬──────────────────────────┘
-           │  回覆
-           ▼
+           ▼                                            ▼
+┌─────────────────────────────────────┐     ┌─────────────────────────────────────┐
+│  hermes（腦）                         │     │  belfast（腦）                       │
+│  • SOUL.md 人設（大肥鯨）              │     │  • SOUL.md 人設（貝爾法斯特）          │
+│  • 每個 conversation 一條獨立歷史      │     │  • 同樣嘅架構，唔同嘅角色同 model      │
+│  • web search / vision / video_analyze│     │                                      │
+│  • 模型呼叫（OpenRouter / deepseek）   │     │  • 模型呼叫（xAI / grok）             │
+└──────────┬──────────────────────────┘     └──────────┬──────────────────────────┘
+           │  回覆                                       │
+           ▼                                            ▼
      Router 渲染 → 送回 Telegram
 ```
+
+⚠️ **容器入面 `127.0.0.1` 係自己** —— `FW_HERMES_URL` 一定要由
+`http://127.0.0.1:8642` 蓋成 `http://hermes:8642`（compose 嘅 `environment:` 做咗）。
+主機 port `127.0.0.1:8642` / `:8643` 仍然開住，但純粹為咗主機側除錯。
+
+**舊寫法**（Router 跑喺主機、只有一個腦）已經退役 —— 唔使再靠看守程序
+或者某個 session 開住個 shell，`restart: unless-stopped` 自己處理。
 
 ## 已實測
 
@@ -59,22 +81,29 @@ chain-a 記「藍色」 → 問 chain-a → 藍色 ✅
 
 | 檔案 | 角色 |
 |---|---|
-| `core/chain.py` | ⭐ 引用串解析 → 直接決定 `conversation` 個名 |
+| `router/chain` → `core/chain.py` | ⭐ 引用串解析 → 直接決定 `conversation` 個名 |
 | `core/access.py` | 授權、邀請碼、群組白名單 |
 | `core/ratelimit.py` | 節流 |
-| `render/markdown.py` + `render/split.py` | Markdown → TG HTML、長訊息分拆 |
-| `bot/ui.py` | 送出、typing |
-| `store/` | SQLite（`group_cache`、`memory_notes`、`usage_log`…） |
-| `core/memory.py` | per-user 筆記抽取（見下） |
+| `core/stickers.py` | 貼圖庫、`[[貼圖:N]]` 解析 |
+| `render/` | Markdown → TG HTML、長訊息分拆 |
+| `router/ui.py` | 送出、typing（原 `bot/ui.py`，2026-09-26 搬入 `router/`）|
+| `store/` | SQLite（`group_cache`、`memory_notes`、`usage_log`…）|
+| `core/memory.py` | per-user 筆記抽取（見下）|
+| `llm/` | ⚠️ **冇掉走** —— 記憶抽取同 Jev 決策閘仍然經 OpenRouter 直打 |
 
 ### 交畀 Hermes
 
-人設、對話歷史、模型呼叫、web search、vision、影片分析。
+人設、對話歷史、模型呼叫、web search、vision、**影片同真 GIF 分析**。
 
-### 掉走
+### 掉走（2026-09-26 清走）
 
-`llm/openrouter.py`、`core/chat.py`、`core/persona.py` 嘅 prompt 組裝、
-`core/session.py`、`llm/decisions.py`（Jev）。
+`core/chat.py`、`core/persona.py`（三節規則搬去 `hermes/persona_rules.py`）、
+`core/security.py`、`core/webfetch.py`、`core/tuning.py`、`core/debounce.py`、
+`core/maintenance.py`、`dafeijing/bot/` 成個目錄。
+
+其後**再清一批**（同日夜晚，見下面「真 GIF」）：
+`core/media.py` 嘅 `describe_video` / `remember_note` / `get_cached_note` /
+`VideoNote` / `_DELEGATE_PROMPT`，同 `router/gif.py` 成個檔。
 
 ## 四個關鍵決定
 
@@ -155,23 +184,40 @@ Jev 記憶閘（`memory.py:188`）、自動抽取、定期濃縮、scope 隔離�
 
 每次請求前，將**當前發言者**嘅筆記注入。
 
-### 4. 真 GIF 例外（Router 自己做）
+### 4. 真 GIF：轉做 MP4，行返影片條路（2026-09-26 改）
 
-**Hermes 做唔到真 GIF：**
+**Hermes 收唔到真 GIF：**
 
 ```python
 _VIDEO_MIME_TYPES = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".mpeg", ".mpg"}
 ```
 
-1. `.gif` 唔喺清單 —— 送都送唔到
-2. Hermes 一律用 `_media_messages(prompt, "video_url", ...)`
+`.gif` 唔喺清單，而且 Hermes 一律用 `video_url` 送。
 
-而 `settings.py:240-251` 記錄咗實測：真 GIF 經 `video_url` 會 HTTP 400，
-只有 `xiaomi/mimo-v2.6-flash` 經 `image_url` 睇得到，**其他模型會靜默作嘢**
-（10 個模型實測，見 commit `66a0747`）。
+**原本嘅做法**（Router 自己交 `xiaomi` 經 `image_url`）**已推翻** ——
+`xiaomi` 收得落 GIF，但**作出郁動**。實測一條「藍方塊固定左上角、
+紅圓水平由左移向右」嘅測試 GIF：
 
-所以：**`.gif` → `xiaomi/mimo-v2.6-flash` + `image_url`，Router 自己處理。**
-其餘影片交 Hermes。
+| model | content type | 結果 |
+|---|---|---|
+| `xiaomi/mimo-v2.6-flash` | `image_url` | 有回應，但答「兩個都係**垂直**移動」❌ |
+| `xiaomi` | `video_url` | HTTP 422 |
+| `bytedance-seed/seed-2.0-mini` | `image_url` | 回空白 |
+| `seed-2.0-mini` | `video_url` | HTTP 400 |
+
+即係**冇一個 model 真係睇得明 GIF 嘅郁動**。
+
+**而家**：Router 用 ffmpeg 將真 GIF 轉做 MP4，再當普通影片交畀 Hermes。
+同一個 model（`seed-2.0-mini`，經 `video_url`）收到轉出嚟嘅 MP4 就答得
+**完全正確**（「藍色正方形始終停在左上角沒有變化，红色圆形向畫面右侧移动」），
+而且 15 秒變 3 秒。
+
+- 代價：Router image 要 **ffmpeg**（+~100MB）。呢個推翻咗大肥鯨
+  「本專案不需要 ffmpeg」嗰個決定 —— 嗰個係基於「影片一律外包」，GIF 係例外。
+- 實作喺 `router/videos.py`：`should_send_video` 收埋真 GIF，
+  `_gif_to_mp4` 負責轉檔（**落真檔而唔用 pipe** —— MP4 要 seek 返轉頭補
+  `moov` atom；經 stdout 就要 `frag_keyframe`，出嚟係 fragmented MP4）。
+- **Router 而家完全唔再打媒體 model**，`router/gif.py` 已刪。
 
 ## 成本
 
@@ -199,17 +245,30 @@ _VIDEO_MIME_TYPES = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".mpeg", ".mpg"}
 
 ## 未解決
 
-- **影片未轉發** —— Hermes 收片要一個佢讀得到嘅**路徑**（`input_file` 會
-  400），唔收 data URL。要另外落檔案，再畀個容器內路徑佢。
-  靜態圖已經做好（見上面）。
-- 指令全部未搬（`/remember`、`/forget`、`/new`、邀請碼 `/start`）——
-  Router 冇 command handler。未啟用嘅人目前入唔到嚟。
+- **`model` 淨低嘅用途只剩用量標籤**（`router/handlers.py` 寫入 usage 表）。
+  Router 唔用佢答任何嘢。同類嘅 `model_vision` 已經刪（零呼叫者）。
+- **`FW_GIF_DELEGATE_MODEL` / `FW_VIDEO_DELEGATE_MODEL` 已經冇用** ——
+  Router 唔再打媒體 model。env 檔入面嗰兩條線已刪。
 - 群組白名單取代咗大肥鯨「管理員在場」嘅規則
 - `SOUL.md` 新增嘅「查證」「記憶」兩節只做過抽樣實測
+
+**已解決（原本列喺度）**：影片轉發 ✅（`router/videos.py` 落檔 ＋
+`video_note` 畀容器內路徑）、指令 ✅（15 個已搬，見 `router/commands.py`）。
 
 ---
 
 # 進度
+
+## 2026-09-26 晚：第二隻 bot ＋ 收歸一個 compose
+
+| 做咗 | 邊度 |
+|---|---|
+| 第二個人設（貝爾法斯特）| `belfast/` |
+| 四個 service 一個 compose | repo 根 `docker-compose.yml` |
+| Router 設定化（`FW_SELF_NAME`）| `settings.self_name` |
+| 貼圖標記收單括號 | `core/stickers.py` |
+| 真 GIF 轉 MP4，Router 唔再打媒體 model | `router/videos.py` |
+| 掃走死代碼 | `core/media.py` −170 行、`settings.py` −76 行、刪 `router/gif.py` |
 
 ## 已完成（2026-09-26）
 
@@ -249,24 +308,18 @@ Router 喺 `fat_whale_ds` 嘅 `router-prototype` branch：
 用 Hermes 做要成 11k tokens 一次，用 OpenRouter 係千幾。對話本身
 仍然 100% 經 Hermes。
 
-## 真 GIF 例外
+## 真 GIF
 
-Hermes 嘅 `video_analyze` 收唔到真 GIF：
+**Router 唔再自己睇真 GIF** —— 改為用 ffmpeg 轉做 MP4，再當普通影片
+交畀 Hermes。完整推導同實測數據見上面「四個關鍵決定 §4」。
 
-```python
-_VIDEO_MIME_TYPES = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".mpeg", ".mpg"}
-```
+分辨方法冇變：`source == "animation"` 且**冇** `clip_file_id` 就係真 GIF
+（有 clip 嗰啲係 Telegram 自己轉過嘅 MP4）。但兩者**而家行同一條路**，
+所以 `should_send_video` 唔再排除真 GIF。
 
-1. `.gif` 唔喺清單
-2. 而且一律用 `video_url` 送（`_media_messages(prompt, "video_url", ...)`）
-
-而大肥鯨實測（十個模型，commit `66a0747`）：真 GIF 經 `video_url` 會
-HTTP 400，只有 `xiaomi/mimo-v2.6-flash` 經 `image_url` 睇得到，
-**其他模型會靜默作嘢** —— 垃圾寫入 `media_notes` 永久保存。
-
-所以 `.gif` 由 Router 自己處理（`router/gif.py`），其餘影片交 Hermes。
-分辨方法：`source == "animation"` 且**冇** `clip_file_id`（有 clip 嘅係
-被轉成 MP4 嘅動圖，嗰啲交返 Hermes）。
+⚠️ 舊嘅 `media_notes` 快取表**已經冇人寫／讀** —— `describe_video` 全家
+連同 `router/gif.py` 一齊刪咗。張表刻意留住（遷移唔值得，而且無害），
+schema 有註釋講明。
 
 ## 圖片同貼圖
 
@@ -286,8 +339,8 @@ HTTP 400，只有 `xiaomi/mimo-v2.6-flash` 經 `image_url` 睇得到，
 | `photo` | ✅ |
 | `sticker` | ✅（`.tgs` 動態貼圖送縮圖） |
 | `sticker_motion` | ✅（影片貼圖送縮圖，好過完全睇唔到） |
-| `animation` | ❌ 真 GIF 走 `router/gif.py` |
-| `video` / `video_note` | ❌ 見下面「未解決」 |
+| `animation` | ❌ 真 GIF → 轉 MP4 交 Hermes（見上面「真 GIF」）|
+| `video` / `video_note` | ❌ 落檔交 Hermes 嘅 `video_analyze` |
 
 **貼圖送出**：清單注入 + 解析 `[[貼圖:編號]]`。清單放喺**請求**度而唔係
 `SOUL.md`（Router 改唔到 Hermes 嘅 system prompt），但**每條對話只附一次**
@@ -365,4 +418,47 @@ Hermes 開機自己偵測到並轉做 `journal_mode=DELETE`：
 
 **呢個正正就係大肥鯨當年 `database disk image is malformed` 嘅成因**
 （見 fat_whale_ds README:438-453）。Hermes 自動處理咗，但值得知。
+
+### 5. ⚠️ Router 容器要行 root（`user: "0:0"`）
+
+搬入 Docker 之後 `router-belfast` 起唔到：
+
+```
+sqlite3.OperationalError: unable to open database file
+```
+
+因為 Router 要寫入三個 host 目錄，**擁有者唔同**：
+
+| 目錄 | 擁有者／權限 |
+|---|---|
+| `./data`、`./logs`、`./belfast/logs` | root:root **777** |
+| `./hermes/data/cache/videos` | **uid 10000** / 755 |
+| `./belfast/data` | **uid 10000** / 700 |
+
+後兩者係 **Hermes 容器自己建**嘅（Hermes 內部行 uid 10000），
+而 700 連 `ls` 都唔得。Router image 預設嘅 `whale`（uid 1000）兩邊都撞。
+
+**行 root 係最簡單而又唔使 chown 嚟 chown 去嘅做法** —— 兩隻 bot 嘅檔案
+擁有者本身唔一致，硬砌一個 uid 只會兩邊都撞。呢個容器冇對外開任何 port
+（只係出去 polling Telegram），所以風險有限。
+
+### 6. ⚠️ `FW_HERMES_URL` 一定要蓋成 service name
+
+容器入面 `127.0.0.1` 係**自己**。`.env.router` 嗰句
+`http://127.0.0.1:8642` 喺主機係啱嘅，喺容器就死症 ——
+compose 用 `environment:` 蓋成 `http://hermes:8642` / `http://belfast:8642`。
+**唔好刪嗰兩行。**
+
+### 7. Router image 要 ffmpeg；CWD 決定繼唔繼承 `.env`
+
+- **ffmpeg**：真 GIF → MP4 用（見「真 GIF」）。唔好因為舊註釋
+  「本專案不需要 ffmpeg」而刪走。
+- **CWD**：`settings.py` 寫死 `env_file=".env"`，係 **CWD 相對**。
+  - `router`：`working_dir: /app` → 讀到 repo `.env`（大肥鯨自己嗰份）
+  - `router-belfast`：`working_dir: /app/belfast` → 嗰度冇 `.env`
+    → **零繼承**，每個 `FW_` 都要喺 `belfast/.env.router` 填齊
+
+  呢個係刻意嘅：兩隻 bot 係兩套嘢，唔應該透過 `.env` 互相影響 ——
+  尤其 token 同 API key，繼承到就大件事。順帶 `PYTHONPATH=/app`，
+  因為 `working_dir` 唔係 repo 根時 `-m dafeijing.router.main` 會搵唔到 package。
 
