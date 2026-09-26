@@ -28,6 +28,7 @@ from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
+from .guards import RunawayGuard
 from .hermes import HermesClient
 
 
@@ -47,6 +48,7 @@ class RouterServices:
     profiler: GroupProfiler
     stickers: StickerLibrary
     usage: UsageLog
+    runaway: RunawayGuard
 
     bot_username: str = ""
     bot_id: int = 0
@@ -91,4 +93,7 @@ def create_services(cfg: Settings) -> RouterServices:
         stickers=StickerLibrary(cfg),
         # 記低每次 Hermes 呼叫嘅用量 —— Hermes 唔回 cost，所以要自己估。
         usage=UsageLog(db),
+        runaway=RunawayGuard(
+            cfg.conversation_max_calls, cfg.conversation_window_seconds
+        ),
     )

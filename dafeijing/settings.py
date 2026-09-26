@@ -192,6 +192,20 @@ class Settings(BaseSettings):
     hermes_input_price: float = 0.30
     hermes_output_price: float = 1.20
 
+    # ── 防失控 ──────────────────────────────────────────
+    # **完全唔理其他 bot 發嘅訊息。** 兩個 bot 互相回覆可以永遠停唔到 ——
+    # Hermes 自己個 codebase 都有同一道閘，註釋寫明
+    # 「two bots answering each other's replies never stop otherwise」。
+    #
+    # 唔跟 Hermes 嗰套（允許明確 @）係因為「明確 @」只係將循環變慢，
+    # 冇斷開佢。群組裡面正常唔會需要同另一個 bot 傾偈。
+    allow_bots: bool = False
+
+    # userbot 係用戶帳號，上面嗰道閘捉唔到，所以加多一層：
+    # 同一條對話喺呢個窗口內超過咁多次呼叫就剎停。正常傾偈撞唔到。
+    conversation_max_calls: int = 30
+    conversation_window_seconds: float = 300.0
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

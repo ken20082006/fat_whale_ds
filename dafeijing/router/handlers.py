@@ -31,6 +31,7 @@ from ..core.chain import normalise_name
 from ..core.session import scope_for
 from .conversation import attribute, dm_conversation, group_conversation
 from .gif import gif_note
+from .guards import is_bot_sender
 from .hermes import HermesError
 from .images import collect_images
 from .memory import (
@@ -402,6 +403,12 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if not is_addressed_to_bot(message, svc):
         return
+    # 閘一：完全唔理其他 bot。呢個就係斷開「兩個 bot 互相引用」循環嘅位 ——
+    # 另一個 bot 引用本鯨嘅回覆，`is_addressed_to_bot` 當佢係被指名，
+    # 但其實佢唔係人（見 router/guards.py 開頭）。
+    if not svc.cfg.allow_bots and is_bot_sender(message):
+        logger.info("群組：%s 係 bot，唔應", user.id)
+        return
     # **群組唔查個人授權。** 大肥鯨嘅規則係「管理員在唔在個群」
     # （上面嗰個 group_usable 已經查咗），唔會逐個人擋 ——
     # 加咗嘅話會令群友全部冇反應，而佢哋本來用得。
@@ -421,6 +428,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await svc.chain.cache_from_update(message.reply_to_message)
 
     conversation = await _conversation_for(svc, message)
+    # 閘二：同一條對話短時間內太多次呼叫就剎停。放喺下載媒體之前 ——
+    # 失控嗰陣最貴嘅係 Hermes 嗰一 call，冇理由仲要先做嘢。
+    if not svc.runaway.allow(conversation):
+        return
     # 媒體：真 GIF 由 Router 自己睇、影片落檔交畀 Hermes、
     # 靜態圖轉發去 vision。三者都喺 router/ 入面各自一個模組。
     extras = await _media_extras(context.bot, message, svc)
@@ -461,6 +472,10 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     svc = get_services(context)
 
+    if not svc.cfg.allow_bots and is_bot_sender(message):
+        logger.info("私聊：%s 係 bot，唔應", user.id)
+        return
+
     if not await _allowed_private(svc, user):
         logger.info("私聊：%s 未獲授權，唔應", user.id)
         return
@@ -478,6 +493,8 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     conversation = dm_conversation(
         message.chat_id, thread_id, getattr(svc, "dm_generation", 0)
     )
+    if not svc.runaway.allow(conversation):
+        return
     extras = await _media_extras(context.bot, message, svc)
     images = await _collect_all_images(context.bot, message, svc)
     body, scope, raw = await _body_for(

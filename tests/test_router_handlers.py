@@ -182,12 +182,14 @@ def _services(chain, hermes):
             model="test/model",
             hermes_input_price=0.30,
             hermes_output_price=1.20,
+            allow_bots=False,
         ),
         chain=chain,
         hermes=hermes,
         sessions=SimpleNamespace(notes=notes, get_group_profile=_no_profile),
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
+        runaway=SimpleNamespace(allow=lambda _c: True),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),
@@ -752,3 +754,87 @@ def test_quoting_the_bot_attaches_no_chain():
     body = hermes.calls[0][1]
     assert "久遠嗰句" not in body
     assert "本鯨答過" not in body
+
+
+# ── 防失控 ──────────────────────────────────────────────
+
+
+def _bot_message(*, is_bot=True, message_id=500):
+    message = _message(message_id=message_id)
+    message.from_user = SimpleNamespace(
+        id=777, full_name="另一隻 bot", username="other_bot", is_bot=is_bot
+    )
+    return message
+
+
+def test_a_message_from_another_bot_is_ignored():
+    """**呢個就係斷開循環嘅位。** 另一個 bot 引用本鯨嘅回覆 ——
+    `is_addressed_to_bot` 當佢係被指名，但佢唔係人。"""
+    hermes = FakeHermes()
+    svc = _services(FakeChain({9001: CONV_A}), hermes)
+    parent = _reply_to_bot(9001)
+
+    _run_group(_bot_message(message_id=950), svc)
+
+    assert hermes.calls == [], "唔可以叫 Hermes"
+    assert hermes.calls == [], "亦唔可以有任何快取動作"
+
+
+def test_a_human_message_is_unaffected():
+    """呢道閘唔可以誤擋真人。"""
+    hermes = FakeHermes()
+    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
+    assert len(hermes.calls) == 1
+
+
+def test_allow_bots_lets_it_through_when_asked():
+    """想試 bot-to-bot 嘅話可以開，但預設係關。"""
+    hermes = FakeHermes()
+    svc = _services(FakeChain({9001: CONV_A}), hermes)
+    svc.cfg.allow_bots = True
+
+    _run_group(_bot_message(message_id=950), svc)
+
+    assert len(hermes.calls) == 1
+
+
+def test_runaway_guard_blocks_before_any_work():
+    """剎停要喺下載媒體之前 —— 失控嗰陣最貴嘅係 Hermes 嗰一 call。"""
+    hermes = FakeHermes()
+    svc = _services(FakeChain(), hermes)
+    svc.runaway = SimpleNamespace(allow=lambda _c: False)
+
+    _run_group(_message(message_id=500), svc)
+
+    assert hermes.calls == []
+
+
+def test_runaway_guard_is_asked_about_the_conversation():
+    """要用對話名做鍵 —— 一條串失控唔應該拖累另一條。"""
+    asked: list[str] = []
+    hermes = FakeHermes()
+    svc = _services(FakeChain(), hermes)
+    svc.runaway = SimpleNamespace(allow=lambda c: (asked.append(c), True)[1])
+
+    _run_group(_message(message_id=500), svc)
+
+    assert asked == [f"grp:{CHAT}:500"]
+
+
+def test_private_bot_sender_is_ignored():
+    hermes = FakeHermes()
+    bot = FakeBot()
+    message = _bot_message(message_id=1)
+    message.chat = SimpleNamespace(id=CHAT, type=ChatType.PRIVATE)
+    svc = _services(FakeChain(), hermes)
+
+    asyncio.run(
+        on_private_message(
+            SimpleNamespace(
+                effective_message=message, effective_user=message.from_user
+            ),
+            SimpleNamespace(bot_data={"services": svc}, bot=bot),
+        )
+    )
+
+    assert hermes.calls == []

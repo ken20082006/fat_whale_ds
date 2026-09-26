@@ -299,6 +299,37 @@ python scripts/backup.py
 
 ---
 
+## 防失控：唔理其他 bot
+
+**兩個 bot 互相回覆可以永遠停唔到。** 而循環嘅入口就喺「回覆本鯨就算被
+指名」嗰條規則 —— 另一個 bot 引用本鯨嘅回覆，Router 當佢係同本鯨講嘢，
+回覆佢，佢又引用返，冇完。每次來回都係一次 Hermes 呼叫（~11k tokens）。
+
+呢個唔係假設。Hermes 自己個 codebase 有同一道閘，註釋寫得好白：
+
+> another bot must explicitly @mention us, its quote-replies and plain chatter
+> do not count (**two bots answering each other's replies never stop otherwise**)
+
+**本專案嘅做法更硬：完全唔理其他 bot。** 唔理佢係 @ 定引用定隨口講。
+「明確 @」只係將循環變慢，冇斷開佢 —— 兩個 bot 只要互相 @ 一次就照樣起飛。
+
+| 設定 | 預設 | 意思 |
+|---|---|---|
+| `FW_ALLOW_BOTS` | `false` | 開咗就照收其他 bot 嘅訊息（想試 bot-to-bot 先開） |
+
+**第二道閘：對話層面嘅失控剎停。** userbot 係**用戶帳號**，Telegram 當佢
+係人 —— 上面嗰道閘捉唔到。所以加多一層：同一條對話短時間內太多次呼叫就
+剎停，並且大聲 log（只 log 一次，唔會將日誌灌爆）。
+
+| 設定 | 預設 | 意思 |
+|---|---|---|
+| `FW_CONVERSATION_MAX_CALLS` | 30 | 呢個窗口內最多幾次 |
+| `FW_CONVERSATION_WINDOW_SECONDS` | 300 | 窗口幾長 |
+
+正常傾偈撞唔到（最密都係幾分鐘幾次），但任何失控都會即刻斷。
+
+---
+
 ## 安全須知
 
 - `.env`、`.env.router`、`config/persona.md` 已被 `.gitignore` 排除。
