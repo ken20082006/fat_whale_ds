@@ -47,6 +47,9 @@ class FakeChain:
         """引用串，由舊到新（同 ReplyChain.resolve 一樣）。"""
         return list(self._chain)
 
+    async def roster(self, chat_id: int) -> dict[str, int]:
+        return {}
+
     async def cache_from_update(self, message) -> None:
         self.reply_updates.append(message)
 
@@ -157,6 +160,10 @@ def _context(svc, bot: FakeBot | None = None):
     return SimpleNamespace(bot_data={"services": svc}, bot=bot or FakeBot())
 
 
+async def _no_profile(_chat_id: int):
+    return None
+
+
 def _services(chain, hermes):
     async def ensure(*_a, **_k):
         return None
@@ -168,7 +175,8 @@ def _services(chain, hermes):
         cfg=SimpleNamespace(maintenance_mode=False, admin_ids=(USER_ID,)),
         chain=chain,
         hermes=hermes,
-        sessions=SimpleNamespace(notes=notes),
+        sessions=SimpleNamespace(notes=notes, get_group_profile=_no_profile),
+        profiler=SimpleNamespace(schedule=lambda _cid: None),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),

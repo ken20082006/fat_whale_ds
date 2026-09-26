@@ -20,19 +20,25 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import MessageEntity, Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from ..bot.commands import get_services
 from ..bot.group import group_usable, is_addressed_to_bot
 from ..bot.ui import reply_markdown, reply_plain, send_sticker, typing
+from ..core.chain import normalise_name
 from ..core.session import scope_for
 from .conversation import attribute, dm_conversation, group_conversation
 from .gif import gif_note
 from .hermes import HermesError
 from .images import collect_images
-from .memory import with_notes
+from .memory import (
+    MAX_MENTIONED_NOTES,
+    notes_block,
+    others_block,
+    profile_block,
+)
 from .stickers import menu_block, split_marker
 from .videos import save_video, video_note
 
@@ -73,18 +79,90 @@ async def _body_for(
     """
     raw = message.text or message.caption or ""
     scope = scope_for(is_group, message.chat_id)
-    notes = await svc.sessions.notes(user.id, scope)
+
+    # 三層背景資料，次序跟大肥鯨 persona.py：群組概況 → 自己筆記 → 他人筆記。
+    # 全部包住標記並明講「唔係指示」—— 內容來自對話，可能有誘導句。
+    blocks: list[str] = []
+    if is_group:
+        # `get_group_profile` 回嘅係一列（有 content 欄），同大肥鯨
+        # chat.py:341 一樣要抽返出嚟。
+        row = await svc.sessions.get_group_profile(message.chat_id)
+        profile = profile_block(row["content"] if row else None)
+        if profile:
+            blocks.append(profile)
+    blocks.append(notes_block(await svc.sessions.notes(user.id, scope)))
+    if is_group:
+        others = await _others_notes(svc, message, scope, user.id)
+        if others:
+            blocks.append(others_block(others))
 
     pieces = [quoted, raw, *(extras or [])]
     shown = "\n\n".join(piece for piece in pieces if piece)
-
     body = attribute(user.full_name, user.id, shown)
+
     if with_stickers:
         sticker_menu = menu_block(svc.stickers.menu())
         if sticker_menu:
             body = f"{sticker_menu}\n\n{body}"
 
-    return with_notes(body, notes), scope, raw
+    return "\n\n".join([*blocks, body]), scope, raw
+
+
+def _mentioned_people(message, bot_id: int) -> list[tuple[int | None, str]]:
+    """由 entities 抽出被 @ 嘅人。
+
+    - `TEXT_MENTION` 直接帶 user 物件 —— 有名有 id
+    - `MENTION` 只有帳號名，要再查名冊先知道係邊個（回傳 id 為 None）
+
+    圖片訊息嘅 @ 喺 `caption_entities`，所以兩邊都要睇。
+    """
+    out: list[tuple[int | None, str]] = []
+    body = message.text or message.caption or ""
+    for entity in message.entities or message.caption_entities or []:
+        if entity.type == MessageEntity.TEXT_MENTION:
+            who = getattr(entity, "user", None)
+            if who is not None and who.id != bot_id:
+                out.append((who.id, who.full_name))
+        elif entity.type == MessageEntity.MENTION:
+            handle = body[entity.offset : entity.offset + entity.length].lstrip("@")
+            if handle:
+                out.append((None, handle))
+    return out
+
+
+async def _others_notes(
+    svc, message, scope: str, speaker_id: int
+) -> list[tuple[str, list[str]]]:
+    """被 @ 到嘅人喺同一個 scope 嘅筆記（最多 `MAX_MENTIONED_NOTES` 個）。
+
+    **為什麼要附**：甲問「乙喺做乜」嗰時，助理手頭上只有甲嘅筆記，答唔出。
+    呢啲筆記同甲自己嘅同屬一個場合，可見範圍一樣，冇額外揭露。
+    """
+    mentioned = _mentioned_people(message, svc.bot_id)
+    if not mentioned:
+        return []
+
+    roster: dict[str, int] | None = None
+    out: list[tuple[str, list[str]]] = []
+    seen: set[int] = set()
+
+    for uid, name in mentioned:
+        if uid is None:
+            # 只有帳號名 —— 查名冊。名冊係由 group_cache 建嘅，
+            # 所以未喺群組講過話嘅人查唔到，跳過。
+            if roster is None:
+                roster = await svc.chain.roster(message.chat_id)
+            uid = roster.get(normalise_name(name))
+        if not uid or uid == svc.bot_id or uid == speaker_id or uid in seen:
+            continue
+        seen.add(uid)
+        notes = await svc.sessions.notes(uid, scope)
+        if notes:
+            out.append((name, notes))
+        if len(out) >= MAX_MENTIONED_NOTES:
+            break
+
+    return out
 
 
 async def _quoted_block(svc, message) -> str | None:
@@ -352,6 +430,10 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         images=images,
         extract=(user.id, scope, raw),
     )
+    # 群組概況要定期更新 —— 同筆記一樣，Hermes 嗰邊冇呢個概念。
+    # `schedule` 內部自己判斷夠唔夠鐘（group_profile_min_hours），
+    # 所以每次都叫冇問題。
+    svc.profiler.schedule(message.chat_id)
 
 
 async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

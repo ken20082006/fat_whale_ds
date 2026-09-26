@@ -108,6 +108,7 @@ async def _post_shutdown(application: Application) -> None:
     """
     svc: RouterServices = application.bot_data["services"]
     await svc.memory.drain()
+    await svc.profiler.drain()
     await svc.llm.close()
     await svc.decisions.close()
     await svc.hermes.close()

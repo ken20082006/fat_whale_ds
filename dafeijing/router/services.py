@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from ..core.access import AccessControl, MembershipCache
 from ..core.chain import ReplyChain
+from ..core.groupprofile import GroupProfiler
 from ..core.memory import MemoryExtractor
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
@@ -42,6 +43,7 @@ class RouterServices:
     llm: OpenRouterClient
     decisions: DecisionsClient
     memory: MemoryExtractor
+    profiler: GroupProfiler
     stickers: StickerLibrary
 
     bot_username: str = ""
@@ -78,6 +80,9 @@ def create_services(cfg: Settings) -> RouterServices:
         llm=llm,
         decisions=decisions,
         memory=MemoryExtractor(cfg, sessions, llm, decisions),
+        # 群組概況：每個群一則氣氛/慣例。同筆記一樣要自己排程更新，
+        # 因為 Hermes 嗰邊冇呢個概念。
+        profiler=GroupProfiler(cfg, sessions, llm),
         # 貼圖庫由 app.py 嘅 post_init 載入（要等 db 連上先讀得到）。
         stickers=StickerLibrary(cfg),
     )

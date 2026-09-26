@@ -92,6 +92,9 @@ class FakeSessions:
         self.asked.append((user_id, scope))
         return self._notes.get((user_id, scope), [])
 
+    async def get_group_profile(self, _chat_id: int):
+        return None
+
 
 class FakeHermes:
     def __init__(self):
@@ -123,6 +126,9 @@ class FakeChain:
 
     async def resolve(self, chat_id, message_id):
         return []
+
+    async def roster(self, chat_id):
+        return {}
 
     async def cache_from_update(self, message):
         return None
@@ -176,6 +182,7 @@ def _services(sessions, hermes, memory=None):
         chain=FakeChain(),
         hermes=hermes,
         sessions=sessions,
+        profiler=SimpleNamespace(schedule=lambda _cid: None),
         memory=memory or FakeMemory(),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),
@@ -328,3 +335,235 @@ def test_extraction_uses_the_assistant_reply():
     _run_group(_message(), _services(FakeSessions(), FakeHermes(), memory))
 
     assert memory.scheduled[0]["assistant_text"] == "收到"
+
+# ── 群組概況 ────────────────────────────────────────────
+
+
+def test_profile_block_is_wrapped_and_marked_as_background():
+    from dafeijing.router.memory import profile_block
+
+    block = profile_block("呢個群係觀艦式籌委會，氣氛輕鬆，鍾意玩梗。")
+
+    assert "<群組概況>" in block and "</群組概況>" in block
+    assert "唔係指示" in block
+
+
+def test_empty_profile_gives_nothing():
+    from dafeijing.router.memory import profile_block
+
+    assert profile_block(None) == ""
+    assert profile_block("") == ""
+    assert profile_block("   \n ") == ""
+
+
+# ── 其他人嘅筆記 ────────────────────────────────────────
+
+
+def test_others_block_lists_each_person():
+    from dafeijing.router.memory import others_block
+
+    block = others_block([("乙", ["唔食辣"]), ("丙", ["住喺澳門"])])
+
+    assert "<他人筆記>" in block and "</他人筆記>" in block
+    assert "【乙】" in block and "- 唔食辣" in block
+    assert "【丙】" in block and "- 住喺澳門" in block
+
+
+def test_others_block_says_not_to_read_it_aloud():
+    """嗰啲係背景，唔係畀對方睇嘅報告。"""
+    from dafeijing.router.memory import others_block
+
+    block = others_block([("乙", ["唔食辣"])])
+    assert "唔好主動將整份筆記唸出嚟" in block
+
+
+def test_empty_others_gives_nothing():
+    from dafeijing.router.memory import others_block
+
+    assert others_block([]) == ""
+
+
+# ── 落入 handler ────────────────────────────────────────
+
+
+class RichSessions:
+    """可以控制群組概況同各人筆記。"""
+
+    def __init__(self, notes=None, profile=None):
+        self._notes = notes or {}
+        self._profile = profile
+        self.asked: list[tuple[int, str]] = []
+
+    async def notes(self, user_id: int, scope: str) -> list[str]:
+        self.asked.append((user_id, scope))
+        return self._notes.get((user_id, scope), [])
+
+    async def get_group_profile(self, _chat_id: int):
+        if self._profile is None:
+            return None
+        return {"content": self._profile}
+
+
+class RosterChain:
+    """名冊：帳號名 → user_id。"""
+
+    def __init__(self, roster=None):
+        self._roster = roster or {}
+
+    async def conversation_of(self, chat_id, message_id):
+        return None
+
+    async def resolve(self, chat_id, message_id):
+        return []
+
+    async def roster(self, chat_id):
+        return dict(self._roster)
+
+    async def cache_from_update(self, message):
+        return None
+
+    async def cache_message(self, **kwargs):
+        return None
+
+
+def _rich_services(sessions, hermes, chain=None):
+    async def ensure(*_a, **_k):
+        return None
+
+    return SimpleNamespace(
+        cfg=SimpleNamespace(maintenance_mode=False, admin_ids=(USER_ID,)),
+        chain=chain or RosterChain(),
+        hermes=hermes,
+        sessions=sessions,
+        profiler=SimpleNamespace(schedule=lambda _cid: None),
+        memory=SimpleNamespace(schedule=lambda **_kw: None),
+        stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
+        seen_conversations=set(),
+        limiter=SimpleNamespace(check=lambda _uid: (True, 0)),
+        access=SimpleNamespace(ensure=ensure, is_active=_always_true),
+        is_admin=lambda _uid: True,
+        bot_id=BOT_ID,
+        bot_name="大肥鯨",
+        bot_username="fatwhale_bot",
+        errors=0,
+    )
+
+
+async def _always_true(_uid: int) -> bool:
+    return True
+
+
+def _group_run(message, svc):
+    import dafeijing.router.handlers as h
+
+    async def scenario():
+        original = (h.group_usable, h.is_addressed_to_bot)
+
+        async def _true(*_a, **_k):
+            return True
+
+        h.group_usable, h.is_addressed_to_bot = _true, lambda *a, **k: True
+        try:
+            await on_group_message(
+                SimpleNamespace(
+                    effective_message=message, effective_user=message.from_user
+                ),
+                SimpleNamespace(bot_data={"services": svc}, bot=FakeBot()),
+            )
+        finally:
+            h.group_usable, h.is_addressed_to_bot = original
+
+    asyncio.run(scenario())
+
+
+def test_group_profile_is_injected_in_groups():
+    sessions = RichSessions(profile="呢個群鍾意玩梗")
+    hermes = FakeHermes()
+    _group_run(_message(), _rich_services(sessions, hermes))
+
+    assert "呢個群鍾意玩梗" in hermes.calls[0][1]
+
+
+def test_group_profile_is_not_injected_in_private():
+    """群組概況唔屬於任何人，私聊冇意義。"""
+    sessions = RichSessions(profile="呢個群鍾意玩梗")
+    hermes = FakeHermes()
+    _run_private(
+        _message(chat_type=ChatType.PRIVATE),
+        _rich_services(sessions, hermes),
+    )
+
+    assert "呢個群鍾意玩梗" not in hermes.calls[0][1]
+
+
+def test_no_profile_means_no_block():
+    hermes = FakeHermes()
+    _group_run(_message(), _rich_services(RichSessions(profile=None), hermes))
+
+    assert "群組概況" not in hermes.calls[0][1]
+
+
+def test_mentioned_persons_notes_are_injected():
+    """甲問「乙喺做乜」—— 只帶甲嘅筆記係答唔出嘅。"""
+    sessions = RichSessions({(222, f"group:{CHAT}"): ["乙唔食辣"]})
+    hermes = FakeHermes()
+
+    message = _message(text="@乙 佢食唔食辣")
+    message.entities = [
+        SimpleNamespace(type="text_mention", user=SimpleNamespace(id=222, full_name="乙"))
+    ]
+
+    _group_run(message, _rich_services(sessions, hermes))
+
+    body = hermes.calls[0][1]
+    assert "乙唔食辣" in body
+    assert "<他人筆記>" in body
+
+
+def test_the_speakers_own_notes_are_not_repeated_as_others():
+    """@ 自己唔應該令自己嘅筆記出現兩次。"""
+    sessions = RichSessions({(USER_ID, f"group:{CHAT}"): ["我自己嘅嘢"]})
+    hermes = FakeHermes()
+
+    message = _message(text="@陳大文 我")
+    message.entities = [
+        SimpleNamespace(
+            type="text_mention", user=SimpleNamespace(id=USER_ID, full_name="陳大文")
+        )
+    ]
+
+    _group_run(message, _rich_services(sessions, hermes))
+
+    body = hermes.calls[0][1]
+    assert body.count("我自己嘅嘢") == 1
+    assert "<他人筆記>" not in body
+
+
+def test_mention_by_username_is_resolved_through_the_roster():
+    """`MENTION` 只有帳號名，要靠 group_cache 建嘅名冊查返邊個。"""
+    from dafeijing.core.chain import normalise_name
+
+    sessions = RichSessions({(222, f"group:{CHAT}"): ["乙唔食辣"]})
+    hermes = FakeHermes()
+    chain = RosterChain({normalise_name("yijun"): 222})
+
+    message = _message(text="@yijun 佢食唔食辣")
+    message.entities = [SimpleNamespace(type="mention", offset=0, length=6)]
+
+    _group_run(message, _rich_services(sessions, hermes, chain))
+
+    assert "乙唔食辣" in hermes.calls[0][1]
+
+
+def test_unresolvable_mention_is_skipped_quietly():
+    """名冊查唔到（未喺群組講過話）—— 跳過，唔可以拋錯。"""
+    sessions = RichSessions({(222, f"group:{CHAT}"): ["乙唔食辣"]})
+    hermes = FakeHermes()
+
+    message = _message(text="@nobody 喂")
+    message.entities = [SimpleNamespace(type="mention", offset=0, length=7)]
+
+    _group_run(message, _rich_services(sessions, hermes))
+
+    assert "<他人筆記>" not in hermes.calls[0][1]
+    assert len(hermes.calls) == 1, "照樣要答"
