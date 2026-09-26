@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS group_cache (
     -- Telegram 的穩定識別碼。media_notes 的快取鍵靠它 —— 沒有這欄，
     -- 引用串那條路就認不出「同一條片」，會每次重新外包而且描述唔一致。
     unique_id     TEXT,
+    -- Router 用：本鯨自己嘅回覆屬於邊一條 Hermes 對話。
+    -- 只有 bot 發嘅訊息會有值。別人引用本鯨嗰則時就靠呢欄接返同一條 ——
+    -- 「只有引用本鯨嘅回答先算同一串」呢條規則就係咁實現。
+    conversation  TEXT,
     created_at    TEXT    NOT NULL,
     PRIMARY KEY (chat_id, message_id)
 );

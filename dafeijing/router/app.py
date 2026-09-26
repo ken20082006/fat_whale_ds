@@ -99,7 +99,15 @@ async def _post_init(application: Application) -> None:
 
 
 async def _post_shutdown(application: Application) -> None:
+    """收工前要等背景抽取做完，否則最後幾則嘅筆記會無聲無息咁丟失。
+
+    次序跟大肥鯨：先 drain 背景工作，再關 client，最後關資料庫 ——
+    調轉嘅話抽取會寫落一個已關嘅 db。
+    """
     svc: RouterServices = application.bot_data["services"]
+    await svc.memory.drain()
+    await svc.llm.close()
+    await svc.decisions.close()
     await svc.hermes.close()
     await svc.db.close()
 

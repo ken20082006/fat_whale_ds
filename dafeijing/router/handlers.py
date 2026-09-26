@@ -1,9 +1,19 @@
 """Router 嘅 Telegram handlers。
 
-流程：收到訊息 → 追串根 → 砌對話名 → 交去 Hermes → 回覆 → **補快取自己嘅回覆**。
+流程：收到訊息 → 決定對話 → 交去 Hermes → 回覆 → **補快取自己嘅回覆**。
 
-同大肥鯨最大嘅分別：呢度冇 `svc.chat.respond()`，換成 `svc.hermes.ask()`。
-其餘（授權、節流、引用串快取、渲染、送出）全部照用大肥鯨嗰套。
+**「同一串」嘅定義（用戶定死）：只有引用本鯨嘅回答先算同一串。**
+
+    用戶1 @bot              → 開新對話 A
+    bot 回答 R1（記住 R1 屬於 A）
+    用戶2 引用 R1           → 同一條對話 A
+    用戶3 引用 用戶2         → **唔算** —— 開新對話
+
+所以唔使追成條引用鏈：只需要記住本鯨每則回覆屬於邊條對話
+（`group_cache.conversation`），引用本鯨嗰則時查返出嚟。
+
+咁亦代表**每次只需要送觸發嗰一句**：一條對話入面除咗觸發訊息就係本鯨
+自己嘅回覆，Hermes 已經有齊歷史，唔使重送。
 """
 
 from __future__ import annotations
@@ -17,14 +27,11 @@ from telegram.ext import ContextTypes
 from ..bot.commands import get_services
 from ..bot.group import group_usable, is_addressed_to_bot
 from ..bot.ui import reply_markdown, reply_plain, typing
-from .conversation import (
-    attribute,
-    build_input,
-    dm_conversation,
-    group_conversation,
-    pending_since_bot,
-)
+from ..core.session import scope_for
+from .conversation import attribute, dm_conversation, group_conversation
+from .gif import gif_note
 from .hermes import HermesError
+from .memory import with_notes
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +42,71 @@ def _is_group(chat) -> bool:
     return chat is not None and chat.type in _GROUP_TYPES
 
 
-async def _deliver(message, bot, svc, conversation: str, text: str) -> None:
+async def _body_for(
+    svc, message, user, *, is_group: bool, note: str | None = None
+) -> tuple[str, str, str]:
+    """回傳 (送去 Hermes 嘅文字, scope, 訊息原文)。
+
+    訊息文字會標咗發言者，前面再加上**當前發言者**嘅筆記。
+
+    **筆記係 per-user 嘅**：以 `user_id` + scope 分開，所以同一個群入面
+    甲嘅筆記唔會出現喺乙度。Hermes 嗰邊做唔到呢件事（`USER.md` 係全域）。
+
+    `note` 係媒體描述（真 GIF，見 router/gif.py），附喺訊息後面送去 Hermes。
+    **但回傳嘅第三個值係原文** —— 抽筆記一定要用原文，唔可以連媒體描述
+    一齊抽。大肥鯨嘅血淚規則：`media_note` 唔可以落庫，落咗下一輪歷史就
+    多一段，模型會當成自己講過嘅嘢。
+    """
+    raw = message.text or message.caption or ""
+    scope = scope_for(is_group, message.chat_id)
+    notes = await svc.sessions.notes(user.id, scope)
+
+    shown = raw
+    if note:
+        shown = f"{raw}\n\n[這一則嘅內容 {note}]" if raw else f"[這一則嘅內容 {note}]"
+
+    return with_notes(attribute(user.full_name, user.id, shown), notes), scope, raw
+
+
+def _replies_to_bot(message, bot_id: int) -> bool:
+    """呢則係咪引用緊本鯨嘅訊息。"""
+    parent = message.reply_to_message
+    if parent is None:
+        return False
+    sender = getattr(parent, "from_user", None)
+    return sender is not None and sender.id == bot_id
+
+
+async def _conversation_for(svc, message) -> str:
+    """呢則訊息應該入邊條對話。
+
+    引用本鯨嘅回答 → 續返嗰條；否則開新一條（用呢則自己嘅 id 做名）。
+    """
+    if _replies_to_bot(message, svc.bot_id):
+        existing = await svc.chain.conversation_of(
+            message.chat_id, message.reply_to_message.message_id
+        )
+        if existing:
+            return existing
+    return group_conversation(message.chat_id, message.message_id)
+
+
+async def _deliver(
+    message,
+    bot,
+    svc,
+    conversation: str,
+    text: str,
+    *,
+    extract: tuple[int, str, str] | None = None,
+) -> None:
     """交去 Hermes 跟住回覆，最後補快取自己嗰則。
 
-    **補快取呢步唔可以省。** Telegram 唔會將 bot 自己發嘅訊息回傳畀 bot，
-    所以唔手動補嘅話，別人「回覆本鯨」時追唔到串根 ——
-    嗰句會被當成一條**新串**，對話即刻斷開。
+    **補快取呢步唔可以省，而且要連 `conversation` 一齊寫。**
+    Telegram 唔會將 bot 自己發嘅訊息回傳畀 bot；冇補嘅話，別人引用本鯨
+    嗰時查唔到對話，嗰句會被當成新串 —— 對話即刻斷。
+
+    `extract` 係 (user_id, scope, 訊息原文) —— 有值就背景抽筆記。
     """
     try:
         async with typing(bot, message.chat_id):
@@ -60,11 +126,23 @@ async def _deliver(message, bot, svc, conversation: str, text: str) -> None:
             user_id=svc.bot_id,
             display_name=svc.bot_name,
             text=reply.text,
+            conversation=conversation,
+        )
+
+    # 背景抽筆記，唔阻塞回覆。冇 `people` 參數 = 所有事實歸呢位發言者
+    # —— router 每次只收到一個人嘅一句，所以唔使大肥鯨嗰套按名歸屬。
+    if extract is not None:
+        user_id, scope, user_text = extract
+        svc.memory.schedule(
+            tg_user_id=user_id,
+            scope=scope,
+            user_text=user_text,
+            assistant_text=reply.text,
         )
 
 
 async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """群組：被 @ 或回覆本鯨 → 交去該條引用串嘅 Hermes 對話。"""
+    """群組：被 @ 或引用本鯨 → 交去對應嘅 Hermes 對話。"""
     message = update.effective_message
     user = update.effective_user
     if message is None or user is None or not _is_group(message.chat):
@@ -85,24 +163,24 @@ async def on_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user.id, user.full_name, user.username, is_admin=svc.is_admin(user.id)
     )
 
-    # Bot API 收唔到其他 bot 嘅訊息，所以被引用嗰則若唔喺快取就用即時更新補上，
-    # 否則回溯到佢就斷。
+    # Bot API 收唔到其他 bot 嘅訊息，所以被引用嗰則若唔喺快取就用即時更新補上
+    # —— 否則查唔到佢屬於邊條對話。
     if message.reply_to_message is not None:
         await svc.chain.cache_from_update(message.reply_to_message)
 
-    # 追串根 → 對話名。冇引用任何訊息嘅話串根就係呢則自己，即係開新對話。
-    root = await svc.chain.root_id(message.chat_id, message.message_id)
-    conversation = group_conversation(message.chat_id, root)
+    conversation = await _conversation_for(svc, message)
+    # 真 GIF 由 Router 自己睇（Hermes 收唔到 —— 見 router/gif.py）。
+    note = await gif_note(context.bot, message, svc)
+    body, scope, raw = await _body_for(svc, message, user, is_group=True, note=note)
 
-    # 只送「bot 上次發言之後」嘅新訊息 —— Hermes 已經有之前嘅歷史。
-    # 但中間冇 @ 嘅人講嘅嘢都要送，否則 Hermes 完全唔知佢講過乜。
-    chain = await svc.chain.resolve(message.chat_id, message.message_id)
-    body = build_input(
-        pending_since_bot(chain, svc.bot_id),
-        (user.full_name, user.id, message.text or message.caption or ""),
+    await _deliver(
+        message,
+        context.bot,
+        svc,
+        conversation,
+        body,
+        extract=(user.id, scope, raw),
     )
-
-    await _deliver(message, context.bot, svc, conversation, body)
 
 
 async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -127,6 +205,14 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     thread_id = getattr(message, "message_thread_id", None)
     conversation = dm_conversation(message.chat_id, thread_id)
-    body = attribute(user.full_name, user.id, message.text or message.caption or "")
+    note = await gif_note(context.bot, message, svc)
+    body, scope, raw = await _body_for(svc, message, user, is_group=False, note=note)
 
-    await _deliver(message, context.bot, svc, conversation, body)
+    await _deliver(
+        message,
+        context.bot,
+        svc,
+        conversation,
+        body,
+        extract=(user.id, scope, raw),
+    )

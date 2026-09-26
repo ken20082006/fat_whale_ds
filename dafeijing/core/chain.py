@@ -45,13 +45,15 @@ class ReplyChain:
         clip_seconds: float | None = None,
         clip_bytes: int | None = None,
         unique_id: str | None = None,
+        # Router 用：本鯨自己嘅回覆屬於邊一條對話。只有 bot 發嘅訊息會有值。
+        conversation: str | None = None,
     ) -> None:
         await self._db.execute(
             "INSERT INTO group_cache "
             "(chat_id, message_id, reply_to_id, user_id, display_name, username, text, "
             "has_media, media_file_id, media_source, clip_file_id, clip_seconds, "
-            "clip_bytes, unique_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "clip_bytes, unique_id, conversation, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             # `reply_to_id` 用 COALESCE，**不是**覆蓋。
             #
             # 同一個 message_id 會被寫兩次：發送時由我們自己寫（知道它回覆
@@ -79,7 +81,11 @@ class ReplyChain:
             "clip_file_id = excluded.clip_file_id, "
             "clip_seconds = excluded.clip_seconds, "
             "clip_bytes = excluded.clip_bytes, "
-            "unique_id = excluded.unique_id",
+            "unique_id = excluded.unique_id, "
+            # 同 reply_to_id 一樣用 COALESCE：本鯨自己嗰則之後會經
+            # cache_from_update() 再寫一次（冇 conversation），
+            # 覆蓋咗就接唔返條對話。
+            "conversation = COALESCE(excluded.conversation, group_cache.conversation)",
             (
                 chat_id,
                 message_id,
@@ -95,6 +101,7 @@ class ReplyChain:
                 clip_seconds,
                 clip_bytes,
                 unique_id,
+                conversation,
                 now_iso(),
             ),
         )
@@ -173,37 +180,21 @@ class ReplyChain:
         chain.reverse()
         return self._trim(chain)
 
-    async def root_id(self, chat_id: int, leaf_message_id: int) -> int:
-        """回傳這條引用串的**串根 message_id**（永遠唔會回 -1）。
+    async def conversation_of(self, chat_id: int, message_id: int) -> str | None:
+        """本鯨嗰則回覆屬於邊一條對話。唔係本鯨發嘅、或者冇紀錄，就回 None。
 
-        為什麼唔用 `resolve()`：`resolve()` 會為了餵模型而摺疊中段，
-        摺疊出嚟嘅標記 `message_id` 係 -1。如果串根啱好被摺走，
-        `chain[0]` 就會變成 -1 —— 而 router 用串根做對話名，
-        所有咁樣嘅串就會**撞成同一條對話**。
-
-        所以對話命名要用呢個：只往上追，唔裁剪、唔摺疊。
-
-        訊息唔喺快取（或者冇 reply_to）就當它自己就係串根 ——
-        呢個正正就係「冇引用就開新對話」嘅行為。
+        Router 嘅「同一串」規則就係咁實現：**只有引用本鯨嘅回答先算同一串。**
+        所以只需要記住本鯨每則回覆屬於邊條對話，唔使追成條引用鏈 ——
+        引用其他人（例如用戶3 引用用戶2）唔算，返 None，呼叫端當佢開新串。
         """
-        seen: set[int] = set()
-        current = leaf_message_id
-        limit = self._cfg.group_chain_max_messages
-
-        for _ in range(limit):
-            if current in seen:
-                break
-            seen.add(current)
-
-            row = await self._db.fetchone(
-                "SELECT reply_to_id FROM group_cache WHERE chat_id = ? AND message_id = ?",
-                (chat_id, current),
-            )
-            if row is None or row["reply_to_id"] is None:
-                break
-            current = row["reply_to_id"]
-
-        return current
+        row = await self._db.fetchone(
+            "SELECT conversation FROM group_cache "
+            "WHERE chat_id = ? AND message_id = ?",
+            (chat_id, message_id),
+        )
+        if row is None:
+            return None
+        return row["conversation"] or None
 
     def _trim(self, chain: list[dict]) -> list[dict]:
         """超出 token 預算時保留頭尾、摺疊中段。"""

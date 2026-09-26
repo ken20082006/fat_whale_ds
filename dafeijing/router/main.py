@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 def main() -> int:
     cfg = get_settings()
     cfg.ensure_dirs()
-    setup_logging(cfg.log_dir)
+    # 一定要用唔同名嘅 log 檔 —— 同大肥鯨寫同一個檔會令兩邊紀錄都爛。
+    setup_logging(cfg.log_dir, name="router")
 
     if not cfg.hermes_key:
         logger.error("FW_HERMES_KEY 未設定 —— 冇佢就入唔到 Hermes API server")

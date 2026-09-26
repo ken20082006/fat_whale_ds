@@ -1,8 +1,15 @@
 """Router 嘅執行期物件。
 
-同大肥鯨嘅 `bot/services.py` 幾乎一樣，**除咗冇咗「腦」**：
-冇 ChatService、冇 OpenRouter client、冇 Jev、冇記憶抽取器。
-嗰啲全部搬咗去 Hermes。剩返嘅係外殼：授權、快取、引用串、渲染、節流。
+同大肥鯨嘅 `bot/services.py` 幾乎一樣，**除咗對話本身唔喺度**：
+冇 ChatService、冇人設 prompt 組裝、冇 session 摘要 ——
+對話交咗畀 Hermes。
+
+但**記憶同判斷留返喺 Router**：
+- `sessions` / `memory` —— per-user 筆記。Hermes 嗰份 `USER.md` 係 profile
+  全域，冇 per-sender 概念，所以呢件事一定要自己做（見 router/memory.py）。
+- `llm` / `decisions` —— 只為咗背景抽取筆記而存在。呢個係 utility 工作，
+  唔係對話：用 Hermes 做要成 17k tokens 一次，用 OpenRouter 直打係千幾。
+  對話本身仍然 100% 經 Hermes。
 """
 
 from __future__ import annotations
@@ -11,7 +18,11 @@ from dataclasses import dataclass, field
 
 from ..core.access import AccessControl, MembershipCache
 from ..core.chain import ReplyChain
+from ..core.memory import MemoryExtractor
 from ..core.ratelimit import RateLimiter
+from ..core.session import SessionManager
+from ..llm.decisions import DecisionsClient
+from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
 from .hermes import HermesClient
@@ -26,6 +37,10 @@ class RouterServices:
     limiter: RateLimiter
     group_access: MembershipCache
     hermes: HermesClient
+    sessions: SessionManager
+    llm: OpenRouterClient
+    decisions: DecisionsClient
+    memory: MemoryExtractor
 
     bot_username: str = ""
     bot_id: int = 0
@@ -41,8 +56,12 @@ class RouterServices:
 
 
 def create_services(cfg: Settings) -> RouterServices:
-    """砌齊所有依賴。刻意同大肥鯨嗰個同名同形狀 —— 方便日後對照。"""
+    """砌齊所有依賴。刻意同大肥鯨嗰個同名同形狀 —— 方便對照。"""
     db = Database(cfg.db_path)
+    sessions = SessionManager(db, cfg)
+    llm = OpenRouterClient(cfg)
+    decisions = DecisionsClient(cfg)
+
     return RouterServices(
         cfg=cfg,
         db=db,
@@ -51,4 +70,8 @@ def create_services(cfg: Settings) -> RouterServices:
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
         hermes=HermesClient(cfg.hermes_url, cfg.hermes_key),
+        sessions=sessions,
+        llm=llm,
+        decisions=decisions,
+        memory=MemoryExtractor(cfg, sessions, llm, decisions),
     )

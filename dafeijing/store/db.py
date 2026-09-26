@@ -34,6 +34,9 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("stickers", "file_id", "TEXT"),
     ("stickers", "featured", "INTEGER NOT NULL DEFAULT 0"),
     ("group_cache", "username", "TEXT"),
+    # Router：本鯨自己嘅回覆屬於邊一條對話。別人引用本鯨嗰則時，
+    # 就係靠呢欄接返同一條 —— 見 core/chain.py 嘅 conversation_of()。
+    ("group_cache", "conversation", "TEXT"),
 )
 
 
