@@ -143,6 +143,43 @@ class Settings(BaseSettings):
     # 貼出來的長度上限。思考可以極長，不設界會洗版。
     show_reasoning_max_chars: int = 1500
 
+    # ── 維護模式 ──
+    # 遷移或改版期間用：群組被指名也不做任何真工作（不叫模型、不查引用串、
+    # 不看片、不抽記憶），只回一句人設語氣的「調整緊」。
+    #
+    # 為什麼要這個：改版期間群組是 live 的，但答案會唔準。與其靜靜哋答錯，
+    # 不如老實講調整緊。**私聊完全不受影響** —— 只影響群組的回應路徑。
+    #
+    # 開啟方式：/tune set maintenance on（即時生效，不必重啟容器）
+    maintenance_mode: bool = False
+    # 同一個群在這段時間內只出一則通知。通知不是答案，整個群每個人 @ 一次
+    # 就會洗版。純記憶體，重啟歸零。
+    maintenance_notice_cooldown_seconds: int = 600
+
+    # ── Router（大肥鯨外殼 + Hermes 腦）──────────────────
+    # 設計見 C:\ds\hermes_ds\ARCHITECTURE.md。
+    #
+    # Router 唔再自己打 OpenRouter，而係將對話交去 Hermes 嘅 API server，
+    # 用 conversation 參數指定「邊一條引用串」。所以金鑰要嘅係 Hermes
+    # 自己生嗰條 API_SERVER_KEY，唔係 OpenRouter key。
+    #
+    # ⚠️ 呢條 key 由 Hermes 生成，寫喺 Hermes 嗰邊嘅 data/.env，
+    # 唔喺呢個 repo。唔好喺 .env 寫兩次同名 key —— 邊條生效係睇實作。
+    hermes_url: str = "http://127.0.0.1:8642"
+    hermes_key: str = ""
+
+    # 影片轉發用。Hermes 嘅 `video_analyze` 要一個**佢讀得到嘅路徑**，
+    # 唔收 data URL（`input_file` 會 400），所以 Router 要落一個檔。
+    #
+    # Router 跑喺主機、Hermes 跑喺容器，同一個檔有兩個路徑：
+    #   hermes_media_dir      —— 主機寫入（相對於 fat_whale_ds 嘅 CWD）
+    #   hermes_media_prefix   —— 容器讀取（喺提示度話畀模型知）
+    #
+    # 預設值啱啱好：hermes_ds 掛咗 `./data:/opt/data`，所以喺 data 底下
+    # 寫就兩邊都見到。改咗 Hermes 嘅掛載就要跟住改。
+    hermes_media_dir: Path = Path("../hermes_ds/data/cache/videos")
+    hermes_media_prefix: str = "/opt/data/cache/videos"
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

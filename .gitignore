@@ -1,5 +1,6 @@
 # 虛擬環境
 .venv/
+.venv.*/
 venv/
 __pycache__/
 *.py[cod]
@@ -7,6 +8,8 @@ __pycache__/
 
 # 機密：金鑰、人設與形象圖不進版控
 .env
+# Router 自己嗰份（beta bot token + Hermes key）。範本係 .env.router.example。
+.env.router
 config/persona.md
 assets/
 

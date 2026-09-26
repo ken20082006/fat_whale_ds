@@ -196,6 +196,21 @@ async def handle_group_trigger(update: Update, context: ContextTypes.DEFAULT_TYP
         await message.reply_text(f"慢一點，{wait} 秒後再來。")
         return
 
+    # 維護模式：只回一句通知就收工，下面全部不做。
+    #
+    # 為什麼守在這裡而不是 group_usable()：group_usable() 同時守著訊息快取
+    # （cache_group_message）與進出群通知（on_my_chat_member / on_chat_member）。
+    # 那兩樣都該照常 —— 快取是零成本的本地寫入，進出群是維運資訊 ——
+    # 要停的只有「回答」這一件。
+    #
+    # 讀 cfg 而不是 tuning：/tune 是直接改寫 cfg 上的欄位（見 core/tuning.py
+    # 的 Tuning.set），所以 cfg 上的值已經是最新生效值。
+    if svc.cfg.maintenance_mode:
+        notice = svc.maintenance.notice(message.chat_id)
+        if notice is not None:
+            await reply_plain(message, notice)
+        return
+
     # include_reply=False：被引用的那一則由下面的引用串統一處理，避免重複下載
     text, own_images, own_note = await collect(
         message,

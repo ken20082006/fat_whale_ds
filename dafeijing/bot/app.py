@@ -22,6 +22,7 @@ from ..core.chat import ChatService
 from ..core.chain import ReplyChain
 from ..core.groupprofile import GroupProfiler
 from ..core.debounce import Debouncer
+from ..core.maintenance import Maintenance
 from ..core.memory import MemoryExtractor
 from ..core.persona import Persona
 from ..core.ratelimit import RateLimiter
@@ -54,6 +55,7 @@ def create_services(cfg: Settings) -> Services:
     profiler = GroupProfiler(cfg, sessions, llm)
     stickers = StickerLibrary(cfg)
     tuning = Tuning(cfg, db)
+    maintenance = Maintenance(cfg.maintenance_notice_cooldown_seconds)
 
     return Services(
         cfg=cfg,
@@ -81,6 +83,7 @@ def create_services(cfg: Settings) -> Services:
         profiler=profiler,
         stickers=stickers,
         tuning=tuning,
+        maintenance=maintenance,
         debouncer=Debouncer(cfg.debounce_seconds),
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),

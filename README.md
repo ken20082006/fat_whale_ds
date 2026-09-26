@@ -6,6 +6,42 @@ DeepSeek 的擬人化 Telegram Bot。私人邀請制，只有拿到邀請碼的�
 
 ---
 
+## ⚠️ 架構喺 2026-09-26 換咗：Router + Hermes
+
+**呢份 README 大部分內容仍然準確**（授權、記憶、引用串、部署），
+但要先知道而家係兩層：
+
+```
+Telegram → Router（呢個 repo）→ Hermes API → 回覆
+```
+
+| | |
+|---|---|
+| **Router** | 揸 Telegram bot token。做引用串解析、媒體、貼圖、per-user 記憶、指令 |
+| **Hermes** | 個腦。做人設（`SOUL.md`）、對話歷史、模型呼叫、工具 |
+
+**為什麼要分兩層**：原本想直接用 Hermes 取代大肥鯨，但 Hermes 嘅群組
+session key 係「每人一條、冇 TTL」，做唔到「每條引用串一條對話」；
+plugin 又係 observer-only，冇 hook 位改 session key。所以由外面控制。
+
+**完整設計同踩過嘅坑**：`C:\ds\hermes_ds\ARCHITECTURE.md`
+
+**舊版（純大肥鯨，自己打 OpenRouter）** 喺 `legacy-fatwhale` branch ——
+有需要可以返去。
+
+### 啟動（Router）
+
+```bash
+cp .env.router.example .env.router   # 填 token / Hermes key / admin id
+powershell -ExecutionPolicy Bypass -File scripts\run_router.ps1
+```
+
+⚠️ 同一個 bot token 只可以有一個 process 揸住。Router 行緊就唔可以
+同時行舊版大肥鯨 —— 會 409。
+
+---
+
+
 ## 特色
 
 **對話**
