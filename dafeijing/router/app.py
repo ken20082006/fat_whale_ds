@@ -40,7 +40,7 @@ def build_application(svc: RouterServices, cfg: Settings) -> Application:
     # 每個群組訊息都寫入快取，但只有被指名嘅那條串會送去模型。
     #
     # 直接複用大肥鯨嗰個 handler —— 佢嘅邏輯同 router 完全一樣。
-    from ..bot.group import cache_group_message
+    from .telegram import cache_group_message
 
     application.add_handler(
         MessageHandler(
@@ -138,6 +138,6 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = getattr(message, "chat", None)
     if message is None or chat is None or chat.type != "private":
         return
-    from ..bot.ui import reply_plain
+    from .ui import reply_plain
 
     await reply_plain(message, "本鯨這邊出了點狀況，等一下再試。")

@@ -24,9 +24,9 @@ from telegram import MessageEntity, Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
-from ..bot.commands import get_services
-from ..bot.group import group_usable, is_addressed_to_bot
-from ..bot.ui import reply_markdown, reply_plain, send_sticker, typing
+from .telegram import get_services
+from .telegram import group_usable, is_addressed_to_bot
+from .ui import reply_markdown, reply_plain, send_sticker, typing
 from ..core.chain import normalise_name
 from ..core.session import scope_for
 from .conversation import attribute, dm_conversation, group_conversation

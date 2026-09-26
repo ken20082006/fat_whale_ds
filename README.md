@@ -361,23 +361,36 @@ python scripts/backup.py
 
 ```
 dafeijing/
-├── router/       Router：Telegram 外殼 + Hermes 用戶端
+├── router/       Router：Telegram 外殼 + Hermes 用戶端（現行）
 │   ├── handlers.py      群組／私聊流程
+│   ├── telegram.py      群組可用性、訊息快取、被指名判定
 │   ├── conversation.py  對話命名、[名|id] 標註、引用串
 │   ├── hermes.py        API 用戶端
 │   ├── memory.py        三層背景資料注入
+│   ├── guards.py        防失控（唔理其他 bot、對話剎停）
 │   ├── gif.py           真 GIF 例外
 │   ├── images.py        靜態圖轉發
 │   ├── videos.py        影片落檔
 │   ├── stickers.py      貼圖清單同標記
-│   ├── commands.py      指令（大部分借 bot/commands.py）
+│   ├── ui.py            分段送出、打字指示、格式降級
+│   ├── commands.py      18 個指令
 │   └── services.py      執行期物件
-├── bot/          舊版嘅 Telegram handler（Router 借咗部分）
-├── core/         存取控制、引用鏈、節流、記憶、用量
+├── core/         存取控制、引用鏈、節流、記憶、用量、媒體
 ├── llm/          OpenRouter 用戶端（只為記憶抽取同 GIF 外包）
 ├── render/       Markdown → HTML、長訊息分段
 └── store/        SQLite schema 與存取層
 ```
+
+⚠️ **`dafeijing/bot/` 已經刪咗。** 舊版嘅 Telegram 層（`app.py`、`private.py`、
+`commands.py`、`group.py`、`ingest.py`、`services.py`、`ui.py`）同舊腦
+（`core/chat.py`、`core/security.py`、`core/webfetch.py`、`core/debounce.py`、
+`core/tuning.py`、`core/persona.py`）全部清走 —— Router 借咗嗰幾件已經搬入
+`router/telegram.py` 同 `router/ui.py`。
+
+**要睇舊版**：`legacy-fatwhale` branch（純大肥鯨，自己打 OpenRouter）。
+
+人設規則（長度、媒體、安全界線）搬咗去 `hermes_ds/persona_rules.py`，
+由 `build_soul.py` 讀 —— SOUL.md 完全由 `hermes_ds` 話事，唔使隔一個 repo 借。
 
 設計原則：人設喺 `SOUL.md`（Hermes 側），同程式碼完全解耦；
 所有可調參數集中在 `dafeijing/settings.py`。

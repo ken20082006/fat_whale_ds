@@ -1,41 +1,7 @@
-"""Router 嘅指令。
-
-**大部分由舊版搬過嚟。** 原本係 `from .telegram import …` 借返嚟，
-但咁樣會令 `bot/commands.py` 連帶 import 成個舊腦（`core/chat` 等），
-而 Router 一行都冇叫過 —— 依賴分析睇得出，但 import 鏈拖住。
-
-搬入嚟之後 `bot/` 可以整個刪走，`core/chat.py`、`core/security.py`、
-`core/webfetch.py` 亦跟住死。
-
-**冇搬嘅指令**（Router 唔支援）：`/tune`、`/reload_persona`、`/undo`、
-`/export`、`/vibe`、`/think`、`/search` —— 嗰啲控制舊版自己個腦，
-而家個腦係 Hermes（人設喺 `SOUL.md`，調參喺 Hermes 嘅 config）。
-"""
-
-from __future__ import annotations
-
-import logging
-import time
-from functools import wraps
-
-from telegram import Update
-from telegram.constants import ChatType
-from telegram.ext import Application, CommandHandler, ContextTypes
-
-from ..core.access import RedeemStatus
-from ..core.session import PRIVATE_SCOPE, scope_for
-from .services import RouterServices
-from .telegram import get_services
-from .ui import reply_markdown, reply_plain, typing
-
-logger = logging.getLogger(__name__)
-
-
 
 
 def get_services(context: ContextTypes.DEFAULT_TYPE) -> Services:
     return context.bot_data["services"]
-
 
 
 
@@ -55,7 +21,6 @@ def admin_only(func):
 
 
 
-
 async def ensure_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """未授權者一律擋下。回傳是否放行。"""
     svc = get_services(context)
@@ -72,15 +37,13 @@ async def ensure_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
 
 
 
-
 def _current_scope(update: Update) -> str:
     chat = update.effective_chat
     return scope_for(chat.type != ChatType.PRIVATE, chat.id)
 
 
 
-
-async def _scope_label(svc: RouterServices, scope: str) -> str:
+async def _scope_label(svc: Services, scope: str) -> str:
     """把 scope 轉成看得懂的名字。群組 id 對人沒有意義，所以查標題。"""
     if scope == PRIVATE_SCOPE:
         return "私聊"
@@ -92,7 +55,6 @@ async def _scope_label(svc: RouterServices, scope: str) -> str:
         "SELECT title FROM groups WHERE chat_id = ?", (chat_id,), default=None
     )
     return f"群組「{title}」" if title else f"群組 {chat_id}"
-
 
 
 
@@ -133,7 +95,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 
-
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """在私聊與群組都能用，各自記進對應的場合。"""
     if not await ensure_active(update, context):
@@ -154,7 +115,6 @@ async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.effective_message.reply_text(
         "記下了。" if written else "這條已經記過了。"
     )
-
 
 
 
@@ -183,14 +143,12 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 
-
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     chat = update.effective_chat
     await update.effective_message.reply_text(
         f"你的 user id：{user.id}\n這個對話的 chat id：{chat.id}"
     )
-
 
 
 
@@ -218,7 +176,6 @@ async def cmd_issue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 
-
 @admin_only
 async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
@@ -228,7 +185,6 @@ async def cmd_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     ok = await svc.access.revoke_invite(code)
     await update.effective_message.reply_text("已撤銷。" if ok else "找不到這張邀請碼。")
-
 
 
 
@@ -253,7 +209,6 @@ async def cmd_invites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 
-
 @admin_only
 async def cmd_allowgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
@@ -265,7 +220,6 @@ async def cmd_allowgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 
-
 @admin_only
 async def cmd_denygroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
@@ -274,7 +228,6 @@ async def cmd_denygroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.effective_message.reply_text(
         f"群組 {chat_id} 已停用。" if ok else f"沒有 {chat_id} 的紀錄。"
     )
-
 
 
 
@@ -293,7 +246,6 @@ async def cmd_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 
-
 @admin_only
 async def cmd_block(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
@@ -305,7 +257,6 @@ async def cmd_block(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 
-
 @admin_only
 async def cmd_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
@@ -314,7 +265,6 @@ async def cmd_unblock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     await svc.access.set_status(int(context.args[0]), "active")
     await update.effective_message.reply_text("已解除封鎖。")
-
 
 
 
@@ -335,7 +285,6 @@ async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"　估計費用 ${month.get('cost', 0.0):.4f}\n\n"
         "目前沒有設上限，儘管用。"
     )
-
 
 
 
@@ -362,177 +311,3 @@ async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             name = row["display_name"] or str(row["tg_user_id"])
             lines.append(f"　{name} — {row['tokens'] or 0:,} token")
     await update.effective_message.reply_text("\n".join(lines))
-
-
-
-_USER_HELP = (
-    "本鯨識呢幾樣：\n"
-    "\n"
-    "  /new — 開新對話（私聊）\n"
-    "  /context — 睇下本鯨記得你啲乜\n"
-    "  /remember <嘢> — 叫本鯨記住一件事\n"
-    "  /forget — 清走筆記（加 all 清晒全部場合）\n"
-    "  /id — 睇你嘅 user id\n"
-    "  /help — 呢個表\n"
-    "\n"
-    "直接講嘢就得，唔使指令。@ 本鯨或者回覆本鯨嘅訊息就得。"
-)
-
-
-
-_ADMIN_HELP = (
-    "\n管理員\n"
-    "  /issue <備註> — 產生邀請碼，5 分鐘內有效\n"
-    "  /revoke <碼> — 撤銷未用嘅邀請碼\n"
-    "  /invites — 列出邀請碼狀態\n"
-    "  /allowgroup [chat_id] — 永久放行群組\n"
-    "  /denygroup [chat_id] — 取消永久放行\n"
-    "  /groups — 列出群組同授權狀態\n"
-    "  /block <user_id> — 停用使用者\n"
-    "  /unblock <user_id> — 解除停用"
-)
-
-
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Router 版：只列真係有嘅指令。"""
-    from .telegram import get_services
-
-    svc = get_services(context)
-    user = update.effective_user
-    text = _USER_HELP
-    if user is not None and svc.is_admin(user.id):
-        text += _ADMIN_HELP
-    await update.effective_message.reply_text(text)
-
-
-
-
-async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Router 版：講返筆記，唔講 session 摘要（嗰啲交咗畀 Hermes）。"""
-    if not await ensure_active(update, context):
-        return
-    from .telegram import get_services
-
-    svc = get_services(context)
-    user = update.effective_user
-    if user is None:
-        return
-
-    counts = await svc.sessions.note_counts(user.id)
-    if not counts:
-        body = "本鯨而家冇你嘅筆記。"
-    else:
-        lines = [f"  {scope} — {n} 則" for scope, n in counts]
-        body = "本鯨記得你嘅嘢：\n" + "\n".join(lines)
-
-    await update.effective_message.reply_text(
-        body
-        + "\n\n（對話歷史唔喺呢度 —— 每條引用串係一條獨立對話，"
-        "由 Hermes 管。）"
-    )
-
-
-
-
-async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """開新對話。
-
-    只有私聊有意義 —— 群組嗰邊，每條引用串本來就係一條獨立對話，
-    唔引用任何嘢 @ 本鯨就已經開新嘅。所以喺群組叫呢個指令會講清楚。
-    """
-    if not await ensure_active(update, context):
-        return
-    from .telegram import get_services
-
-    svc = get_services(context)
-    chat = update.effective_chat
-    message = update.effective_message
-
-    if chat.type != ChatType.PRIVATE:
-        await message.reply_text(
-            "群組唔使呢個指令 —— 唔引用任何嘢 @ 本鯨就已經開新對話。\n"
-            "想續返之前嗰條，就引用本鯨嘅回覆。"
-        )
-        return
-
-    # 私聊嘅對話名加一個序號，令佢接唔返上一條。
-    svc.dm_generation = getattr(svc, "dm_generation", 0) + 1
-    await message.reply_text("好，開新嘅。之前傾過嘅本鯨照樣記得。")
-
-
-
-
-async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Router 版。大肥鯨嗰版本報「攔下的洩漏」「聯網搜尋」「讀取連結」——
-    嗰啲係大肥鯨自己個腦做嘅嘢，而家喺 Hermes 嗰邊，呢度冇數可以報。
-
-    所以只報 Router 真正知嘅：授權人數、群組快取、錯誤、運行時間。
-    """
-    import time
-
-    from .telegram import admin_only, get_services
-
-    @admin_only
-    async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        svc = get_services(context)
-        active = await svc.db.fetchval(
-            "SELECT COUNT(*) FROM users WHERE status = 'active'", default=0
-        )
-        pending = await svc.db.fetchval(
-            "SELECT COUNT(*) FROM users WHERE status = 'pending'", default=0
-        )
-        cached = await svc.db.fetchval("SELECT COUNT(*) FROM group_cache", default=0)
-        profiles = await svc.db.fetchval("SELECT COUNT(*) FROM group_profile", default=0)
-        stickers = len(svc.stickers.menu().splitlines()) if svc.stickers.available else 0
-        uptime = int(time.time() - svc.started_at) if svc.started_at else 0
-
-        lines = [
-            "Router 運轉狀態：",
-            f"　已授權使用者　{active}",
-            f"　待驗證　　　　{pending}",
-            f"　群組快取　　　{cached} 則",
-            f"　群組概況　　　{profiles} 個群",
-            f"　精選貼圖　　　{stickers} 張",
-            f"　累計錯誤　　　{svc.errors}",
-            f"　運行時間　　　{uptime // 3600} 小時 {uptime % 3600 // 60} 分",
-        ]
-        await update.effective_message.reply_text("\n".join(lines))
-
-    await _run(update, context)
-
-
-
-
-def register(application: Application) -> None:
-    """掛上所有 Router 支援嘅指令。"""
-    user_commands = (
-        ("start", cmd_start),
-        ("help", cmd_help),
-        ("new", cmd_new),
-        ("context", cmd_context),
-        ("remember", cmd_remember),
-        ("forget", cmd_forget),
-        ("quota", cmd_quota),
-        ("id", cmd_id),
-    )
-    admin_commands = (
-        ("issue", cmd_issue),
-        ("revoke", cmd_revoke),
-        ("invites", cmd_invites),
-        ("allowgroup", cmd_allowgroup),
-        ("denygroup", cmd_denygroup),
-        ("groups", cmd_groups),
-        ("block", cmd_block),
-        ("unblock", cmd_unblock),
-        ("cost", cmd_cost),
-        ("stats", cmd_stats),
-    )
-    for name, handler in (*user_commands, *admin_commands):
-        application.add_handler(CommandHandler(name, handler))
-    logger.info(
-        "指令註冊：%d 個使用者、%d 個管理員",
-        len(user_commands),
-        len(admin_commands),
-    )

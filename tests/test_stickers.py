@@ -6,7 +6,6 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from dafeijing.core.persona import Persona, PersonaContext
 from dafeijing.core.stickers import StickerLibrary, extract_marker
 from dafeijing.store.db import Database
 
@@ -122,20 +121,3 @@ def test_library_is_unavailable_when_empty():
             await db.close()
 
     asyncio.run(scenario())
-
-
-def test_persona_includes_sticker_menu_when_given():
-    prompt = Persona("角色").build(
-        PersonaContext(sticker_menu="  1｜想表達開心時\n  2｜想撒嬌時")
-    )
-    assert "### 貼圖" in prompt
-    assert "[[貼圖:編號]]" in prompt
-    assert "1｜想表達開心時" in prompt
-    # 要給明確頻率，否則模型會索性完全不用
-    assert "每五到十則" in prompt
-    assert "該用而沒用" in prompt
-
-
-def test_persona_omits_sticker_section_without_menu():
-    prompt = Persona("角色").build(PersonaContext())
-    assert "### 貼圖" not in prompt
