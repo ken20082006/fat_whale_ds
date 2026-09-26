@@ -30,7 +30,6 @@ from .ui import reply_markdown, reply_plain, send_sticker, typing
 from ..core.chain import normalise_name
 from ..core.session import scope_for
 from .conversation import attribute, dm_conversation, group_conversation
-from .gif import gif_note
 from .guards import is_bot_sender
 from .hermes import HermesError
 from .images import collect_images
@@ -236,21 +235,16 @@ async def _collect_all_images(bot, message, svc) -> list[str]:
 
 
 async def _media_extras(bot, message, svc) -> list[str]:
-    """呢則訊息嘅媒體標註 —— 真 GIF 嘅描述、影片嘅檔案路徑。
+    """呢則訊息嘅媒體標註 —— 影片或者真 GIF 嘅檔案路徑。
 
-    兩者只會有一個（一則訊息得一個媒體）。都冇就回空 list。
+    **真 GIF 同影片行同一條路**（2026-09-26 起）：`save_video` 會先將
+    真 GIF 轉做 MP4。原本真 GIF 係喺呢度交外援模型攞一段文字描述，
+    但實測嗰個模型會作出郁動，見 `videos.py` 檔頭。
+
+    一則訊息得一個媒體，所以最多一個標註。冇就回空 list。
     """
-    extras: list[str] = []
-
-    gif = await gif_note(bot, message, svc)
-    if gif:
-        extras.append(f"[這一則嘅內容 {gif}]")
-
     path = await save_video(bot, message, svc)
-    if path:
-        extras.append(video_note(path))
-
-    return extras
+    return [video_note(path)] if path else []
 
 
 def _replies_to_bot(message, bot_id: int) -> bool:

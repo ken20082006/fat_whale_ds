@@ -6,8 +6,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# ⚠️ **ffmpeg 唔可以刪。** 唯一用途係真 GIF → MP4（`router/videos.py`）。
+#
+# 舊設計係「真 GIF 交 xiaomi 經 image_url 睇」，但實測佢**作出郁動**：
+# 一條「藍方塊固定、紅圓水平向右移」嘅測試 GIF，佢答「兩個都係垂直移動」。
+# 轉做 MP4 行影片條路之後，同一個模型答得完全正確，而且快 5 倍。
+#
+# 大肥鯨年代刻意唔要 ffmpeg（「不需要在本機解碼影片」）—— 嗰個決定係基於
+# 「影片一律外包」。GIF 係例外，所以呢個例外要落地解碼。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

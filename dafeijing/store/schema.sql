@@ -157,13 +157,18 @@ CREATE TABLE IF NOT EXISTS runtime_settings (
     updated_at TEXT NOT NULL
 );
 
--- 外包看片的結果，按媒體的**穩定**識別碼（file_unique_id）存。
+-- ⚠️ **冇人再用呢張表**（2026-09-26 起）。
 --
--- 為什麼要快取：同一條片再傳，外包模型會給出**唔同**的描述 —— 實測同一條
--- GIF 三次得到「鯨魚噴水」「掀檯」「街頭窄巷」三個答案。快取令它一致，
--- 而且同一條片第二次開始免費。
+-- 佢原本係「Router 自己外包睇片」嘅描述快取 —— 同一條片再傳就重用同一段
+-- 描述，唔使再付一次，亦避免同一條 GIF 三次得到三個答案。
 --
--- 用 file_unique_id 而非 file_id：後者會隨時間輪換。
+-- 但 Router 而家完全唔再打媒體 model：影片同真 GIF 一律落檔交畀 Hermes 嘅
+-- `video_analyze`（真 GIF 先轉做 MP4）。相關嘅 `describe_video` /
+-- `remember_note` / `get_cached_note` 同兩個 delegate model setting 都已經
+-- 刪走。
+--
+-- **刻意留住張表**：唔刪係免得喺現有 DB 上做遷移，而且佢冇害。
+-- 新 DB 照樣會建。日後想清就先確認真係冇人想復原嗰條路。
 CREATE TABLE IF NOT EXISTS media_notes (
     unique_id   TEXT PRIMARY KEY,
     source      TEXT,

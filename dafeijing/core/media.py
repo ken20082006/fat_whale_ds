@@ -3,11 +3,6 @@
 **圖片**轉成 JPEG 並縮到長邊上限，直接送給主模型 —— 原圖可能很大，而 token
 成本隨尺寸上升，縮圖對辨識力的損失微乎其微。
 
-**影片與動圖不走這條路。** 主模型收不下影片本身，而抽幾個定格看不出連續
-動作、節奏與字幕變化，還會讓模型以為自己看過整段、講出半真半假的描述。
-所以整段片外包給吃得了影片的模型，拿一段文字解說回來（見 `describe_video`）。
-外包不成就是沒有這個媒體 —— **不抽格充數**。
-
 所有內容一律只在記憶體中處理，不落任何暫存檔。
 """
 
@@ -21,7 +16,6 @@ from dataclasses import dataclass
 
 from PIL import Image, UnidentifiedImageError
 
-from .util import now_iso, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -77,35 +71,10 @@ class MediaError(RuntimeError):
 # ── 外包看片 ────────────────────────────────────────────
 
 # 抽格只看得到幾個瞬間：做什麼大致看得出，但連續動作、節奏、字幕變化看不到。
-# 有些模型直接吃得了整段影片，所以把片丟給它看完，拿一段文字回來 ——
-# 之後就當成自己看過的。呼叫端不需要知道這件事。
-_DELEGATE_PROMPT = (
-    "用一段文字講清楚這段影片在做什麼，講給一個沒看過的人聽。"
-    "要講得具體：畫面內容、發生什麼事、過程與先後次序、出現的人物或物件"
-    "（外觀與動作）、鏡頭或節奏的變化、畫面上或字幕出現的文字（照原文寫出來）、"
-    "整體氣氛。"
-    "只描述你真正看到的，不確定就不要講。不要前言，也不要逐格流水帳。"
-)
-
 # data URL 的 mime 不能猜錯，模型會照它解碼。用magic bytes 判，比看來源可靠 ——
 # Telegram 的「動圖」可能是 GIF 也可能是被轉過的 MP4。
 _GIF_MAGIC = (b"GIF87a", b"GIF89a")
 _WEBM_MAGIC = b"\x1a\x45\xdf\xa3"  # EBML，webm / mkv
-
-
-@dataclass(frozen=True)
-class VideoNote:
-    """外援模型看完一段動態素材之後的解說。
-
-    `text` 為空而 `skipped` 有值時，代表**刻意沒有外包**（太長或太大）。
-    呼叫端應該把那句話講給使用者聽，而不是靜靜退回抽格 —— 否則對方
-    會以為整段都被看過了，而實際上我們只看得到幾格。
-    """
-
-    text: str = ""
-    cost: float = 0.0
-    model: str = ""
-    skipped: str = ""
 
 
 # 這幾種都是「一段影片」—— 值得外包去看，而且**不可以只抽幾格充數**。
@@ -134,143 +103,6 @@ def sniff_mime(blob: bytes) -> str:
     return "video/mp4"
 
 
-async def get_cached_note(db, unique_id: str | None) -> str | None:
-    """查這條媒體之前外包過的描述。
-
-    **快取不只是省錢，也是為了一致。** 實測同一條 GIF 外包三次得到
-    「鯨魚噴水」「掀檯」「街頭窄巷」三個唔同描述 —— 外包模型對短片的
-    抽樣不穩定，會自己補。用同一個識別碼鎖住同一個答案。
-    """
-    if db is None or not unique_id:
-        return None
-    row = await db.fetchone(
-        "SELECT description FROM media_notes WHERE unique_id = ?", (unique_id,)
-    )
-    return row["description"] if row else None
-
-
-async def remember_note(
-    db, unique_id: str | None, source: str | None, text: str, model: str
-) -> None:
-    """記住這次外包的結果。同一個 unique_id 再來就重用，不再付費。"""
-    if db is None or not unique_id:
-        return
-    await db.execute(
-        "INSERT INTO media_notes (unique_id, source, description, model, created_at) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(unique_id) DO UPDATE SET description = excluded.description, "
-        "model = excluded.model, created_at = excluded.created_at",
-        (unique_id, source, text, model, now_iso()),
-    )
-
-
-async def describe_video(bot, picked: "Picked", cfg, llm, db=None) -> VideoNote | None:
-    """把整段動態素材交給外援模型看，拿回一段解說。
-
-    **失敗一律回 None**，呼叫端當作「冇睇過呢個媒體」—— 外包是加分項，不是
-    必要路徑，所以這裡連例外都不往外丟：外包掛掉不該讓整則訊息讀不到。
-
-    **真 GIF 同影片走唔同模型、用唔同的 content 型別**（見 settings 的
-    gif_delegate_model 說明）。分流靠檔頭判斷，不靠來源標籤 —— Telegram 的
-    「動圖」可能係 GIF 也可能係被轉過的 MP4，看來源會判錯。
-
-    llm 為 None（或未開啟）時直接跳過，呼叫端就不會多付一次呼叫。
-    db 有值時會按 media 的穩定識別碼快取結果 —— 同一條片再傳就重用。
-    """
-    if llm is None:
-        return None
-
-    # 快取要放在大小／長度檢查之前：那是**已經付過錢**的答案，
-    # 沒有理由因為省錢的判斷而丟掉它。
-    cached = await get_cached_note(db, picked.unique_id)
-    if cached:
-        logger.info("外包看片：命中快取（%s）", picked.source)
-        return VideoNote(text=cached, model="cache")
-
-    # 有本體就用本體；真 GIF 沒有 clip_*，它的 file_id 本身就是 GIF 本體。
-    file_id = picked.clip_file_id or picked.file_id
-    declared = picked.clip_bytes if picked.clip_file_id else picked.declared_bytes
-    limit = cfg.video_delegate_max_bytes
-
-    if declared is not None and declared > limit:
-        logger.info("影片過大，不做外包解說：%d bytes", declared)
-        return VideoNote(skipped="影片太大，外包不划算")
-    # 影片輸入按秒計費，比抽格貴得多。
-    if picked.clip_seconds and picked.clip_seconds > cfg.video_delegate_max_seconds:
-        logger.info("影片過長，不做外包解說：%.0f 秒", picked.clip_seconds)
-        return VideoNote(
-            skipped=f"影片長過 {int(cfg.video_delegate_max_seconds)} 秒，外包不划算"
-        )
-
-    try:
-        blob = await _download(bot, file_id, max_bytes=limit)
-    except MediaError as exc:
-        logger.info("影片本體取不到，退回抽格：%s", exc)
-        return None
-
-    mime = sniff_mime(blob)
-    data_url = f"data:{mime};base64,{base64.b64encode(blob).decode()}"
-
-    # **真 GIF 走另一條路：另一個模型，而且要用 image_url。**
-    #
-    # 這不是偏好問題，是能力問題。實測多個收片模型都「睇唔到」真 GIF，
-    # 而且唔會報錯 —— 佢哋會憑空作一個場景，或者回「請提供具體內容」，
-    # 而兩種都會被當成正常描述寫入 media_notes 並永久保存。詳見
-    # settings.gif_delegate_model。
-    if mime.startswith("image/"):
-        model = cfg.gif_delegate_model
-        media_part = {"type": "image_url", "image_url": {"url": data_url}}
-        what = "GIF"
-    else:
-        model = cfg.video_delegate_model
-        media_part = {"type": "video_url", "video_url": {"url": data_url}}
-        what = "影片"
-
-    try:
-        result = await llm.chat(
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _DELEGATE_PROMPT},
-                        media_part,
-                    ],
-                }
-            ],
-            model=model,
-            max_tokens=cfg.video_delegate_max_tokens,
-            # **刻意不傳 reasoning=False。** 這個端點要求一定要推理，傳
-            # `{"enabled": false}` 會回 400：「Reasoning is mandatory for this
-            # endpoint and cannot be disabled.」不同模型的要求不一樣，所以
-            # 這裡交給端點自己決定 —— 傳錯只會白白失敗一次。
-            #
-            # 因為推理是強制的，`video_delegate_max_tokens` 一定要放得闊：
-            # 推理 token 會吃掉額度，留太窄會「想」到爆額、正文變空
-            # （實測推理佔 780–930 token）。見 settings.py。
-        )
-    except Exception:
-        # 外包用什麼模型、回來什麼形狀都不關這裡的事 —— 任何失敗都等於
-        # 「這次沒外包成」，當作冇睇過就好。
-        logger.exception("外包看片失敗，當作冇睇過")
-        return None
-
-    text = (result.text or "").strip()
-    if not text:
-        return None
-
-    text = truncate(text, cfg.video_delegate_max_chars)
-    await remember_note(db, picked.unique_id, picked.source, text, result.model)
-
-    logger.info(
-        "外包%s：%s → %d 字（$%.6f）",
-        what,
-        picked.source,
-        len(text),
-        result.cost,
-    )
-    return VideoNote(text=text, cost=result.cost, model=result.model)
-
-
 # 過大的檔案另外給一句話。「拿不到檔案、可能是網路不穩」對一個太大的檔案
 # 是錯誤的診斷 —— 使用者會一直重傳同一個檔案。
 TOO_BIG = "這個檔案太大了，本鯨讀不動。傳小一點的，或者截其中一格給我。"
@@ -282,7 +114,7 @@ TOO_BIG = "這個檔案太大了，本鯨讀不動。傳小一點的，或者截
 async def collect_media(bot, picked: Picked, cfg) -> list[PreparedImage]:
     """取得一則媒體該送進模型的畫面。
 
-    **只處理靜態媒體。** 影片與動圖一律走 `describe_video` 外包 ——
+    **只處理靜態媒體。** 影片同動圖一律落檔交畀 Hermes ——
     抽出來的幾個定格看不出連續動作，卻會讓模型以為自己看過整段，
     然後講出半真半假的描述。
     """

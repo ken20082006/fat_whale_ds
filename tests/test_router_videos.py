@@ -31,9 +31,15 @@ def test_mp4_animation_is_sent():
     assert should_send_video(Picked("thumb", "animation", 100, clip_file_id="body"))
 
 
-def test_real_gif_is_not_sent_here():
-    """真 GIF 走 router/gif.py —— Hermes 收唔到，而且要用另一個模型。"""
-    assert not should_send_video(Picked("f", "animation", 100))
+def test_real_gif_is_sent_here():
+    """真 GIF 同影片行同一條路（2026-09-26 起）。
+
+    之前真 GIF 由 Router 自己交外援模型（`xiaomi/mimo-v2.6-flash`）經
+    `image_url` 睇，但實測佢**作出郁動** —— 一條「藍方塊固定、紅圓水平
+    向右移」嘅測試 GIF，佢答「兩個都係垂直移動」。改為落檔之前轉做
+    MP4，交返 Hermes 嗰條路（實測答得完全正確）。
+    """
+    assert should_send_video(Picked("f", "animation", 100))
 
 
 def test_video_sticker_is_not_sent():
@@ -164,18 +170,51 @@ def test_overlong_video_is_skipped(monkeypatch):
         assert asyncio.run(save_video(None, message, _Svc(Path(tmp)))) is None
 
 
-def test_gif_blob_is_skipped(monkeypatch):
-    """萬一有 GIF 漏到呢度 —— Hermes 只收 mp4 / webm，送錯佢會回
-    Unsupported video format。
+def test_gif_blob_is_transcoded_not_written_as_gif(monkeypatch):
+    """落到嚟係 GIF 就走轉檔，唔會照寫個 .gif 出去。
 
-    （正常情況真 GIF 已經畀 `should_send_video` 擋咗，呢個係防守性檢查。）
+    Hermes 嘅 `_VIDEO_MIME_TYPES` 冇 `.gif`（`vision_tools.py:942-950`），
+    照送佢淨係會回 Unsupported video format。
+
+    轉檔本身要真 ffmpeg，所以呢度只驗分流 —— 真 ffmpeg 由
+    `scripts/` 之外嘅人手驗（見 commit 訊息）。
     """
     from dafeijing.router import videos as videos_mod
 
-    async def gif(*_a, **_k):
-        return b"GIF89a\x01\x00\x01\x00"
+    async def fake_download(_bot, _file_id, **_kw):
+        return b"GIF89a" + b"\x00" * 64
 
-    monkeypatch.setattr(videos_mod.media, "_download", gif, raising=False)
+    async def fake_transcode(_blob, directory, stem):
+        (directory / f"{stem}.mp4").write_bytes(b"fake-mp4")
+        return directory / f"{stem}.mp4"
+
+    monkeypatch.setattr(videos_mod.media, "_download", fake_download, raising=False)
+    monkeypatch.setattr(videos_mod, "_gif_to_mp4", fake_transcode)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = asyncio.run(save_video(None, _video_message(), _Svc(Path(tmp))))
+
+        assert path == "/opt/data/cache/videos/uid-1.mp4"
+        assert (Path(tmp) / "uid-1.mp4").exists()
+        assert not (Path(tmp) / "uid-1.gif").exists()
+
+
+def test_gif_transcode_failure_is_treated_as_absent(monkeypatch):
+    """轉唔到就當冇呢個媒體。
+
+    同大肥鯨一致：外包唔成唔會求其抽格充數。呢度亦係 ffmpeg 唔喺 PATH
+    時嘅行為 —— Router image 冇裝 ffmpeg 就會行到呢一步（靜靜哋當冇）。
+    """
+    from dafeijing.router import videos as videos_mod
+
+    async def fake_download(_bot, _file_id, **_kw):
+        return b"GIF89a" + b"\x00" * 64
+
+    async def fake_transcode(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(videos_mod.media, "_download", fake_download, raising=False)
+    monkeypatch.setattr(videos_mod, "_gif_to_mp4", fake_transcode)
 
     with tempfile.TemporaryDirectory() as tmp:
         assert asyncio.run(save_video(None, _video_message(), _Svc(Path(tmp)))) is None
