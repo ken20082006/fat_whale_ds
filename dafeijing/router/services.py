@@ -21,6 +21,7 @@ from ..core.chain import ReplyChain
 from ..core.memory import MemoryExtractor
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
+from ..core.stickers import StickerLibrary
 from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
@@ -41,12 +42,15 @@ class RouterServices:
     llm: OpenRouterClient
     decisions: DecisionsClient
     memory: MemoryExtractor
+    stickers: StickerLibrary
 
     bot_username: str = ""
     bot_id: int = 0
     bot_name: str = "大肥鯨"
     started_at: float = 0.0
     errors: int = field(default=0)
+    # 邊幾條對話已經附過貼圖清單。純記憶體 —— 重啟後每條再附一次，無害。
+    seen_conversations: set[str] = field(default_factory=set)
 
     def is_admin(self, tg_user_id: int | None) -> bool:
         return self.cfg.is_admin(tg_user_id)
@@ -74,4 +78,6 @@ def create_services(cfg: Settings) -> RouterServices:
         llm=llm,
         decisions=decisions,
         memory=MemoryExtractor(cfg, sessions, llm, decisions),
+        # 貼圖庫由 app.py 嘅 post_init 載入（要等 db 連上先讀得到）。
+        stickers=StickerLibrary(cfg),
     )

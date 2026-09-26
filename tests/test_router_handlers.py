@@ -48,11 +48,13 @@ class FakeChain:
 class FakeHermes:
     def __init__(self, text: str = "本鯨收到", boom: bool = False):
         self.calls: list[tuple[str, str]] = []
+        self.images: list[list[str] | None] = []
         self._text = text
         self._boom = boom
 
-    async def ask(self, conversation: str, text: str) -> Reply:
+    async def ask(self, conversation: str, text: str, images=None) -> Reply:
         self.calls.append((conversation, text))
+        self.images.append(images)
         if self._boom:
             raise HermesError("Hermes 回 500")
         return Reply(text=self._text, input_tokens=100, output_tokens=5)
@@ -62,6 +64,7 @@ class FakeBot:
     def __init__(self, message_id: int = 9001):
         self.id = BOT_ID
         self.sent: list[tuple[int, str]] = []
+        self.stickers: list[tuple[int, str]] = []
         self._message_id = message_id
 
     async def send_message(self, chat_id, text, **_kw):
@@ -70,6 +73,10 @@ class FakeBot:
 
     async def send_chat_action(self, *_a, **_k):
         return True
+
+    async def send_sticker(self, chat_id, file_id, **_kw):
+        self.stickers.append((chat_id, file_id))
+        return SimpleNamespace(message_id=self._message_id + 1)
 
 
 def _message(
@@ -142,8 +149,12 @@ def _services(chain, hermes):
         hermes=hermes,
         sessions=SimpleNamespace(notes=notes),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
+        stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
+        seen_conversations=set(),
         limiter=SimpleNamespace(check=lambda _uid: (True, 0)),
-        access=SimpleNamespace(ensure=ensure),
+        access=SimpleNamespace(
+            ensure=ensure, is_active=lambda _uid: True
+        ),
         is_admin=lambda _uid: True,
         bot_id=BOT_ID,
         bot_name="大肥鯨",
@@ -152,7 +163,7 @@ def _services(chain, hermes):
     )
 
 
-def _run_group(message, svc):
+def _run_group(message, svc, bot=None):
     update = SimpleNamespace(effective_message=message, effective_user=message.from_user)
 
     async def scenario():
@@ -166,7 +177,7 @@ def _run_group(message, svc):
 
         h.group_usable, h.is_addressed_to_bot = _true, lambda *a, **k: True
         try:
-            await on_group_message(update, _context(svc))
+            await on_group_message(update, _context(svc, bot))
         finally:
             h.group_usable, h.is_addressed_to_bot = original_usable, original_addressed
 
@@ -338,3 +349,204 @@ def test_private_topics_are_separate_conversations():
 
     assert hermes.calls[0][0] != hermes.calls[1][0]
     assert all(c[0].startswith("dm:") for c in hermes.calls)
+
+
+# ── 圖片轉發 ────────────────────────────────────────────
+
+
+def _photo_message(monkeypatch, bot=None, data_url: str = "data:image/jpeg;base64,AAA"):
+    """令 pick_file 揀到一張相，並令下載回一張假圖。"""
+    from dafeijing.core import media as media_mod
+    from dafeijing.router import images as images_mod
+
+    async def fake_collect(_bot, picked, _cfg):
+        return [media_mod.PreparedImage(data_url, 100, 100, 10, picked.source)]
+
+    monkeypatch.setattr(images_mod.media, "collect_media", fake_collect, raising=False)
+    message = _message(message_id=500, bot=bot)
+    message.photo = [SimpleNamespace(file_id="p", file_size=100, file_unique_id="u")]
+    return message
+
+
+def test_photo_reaches_hermes_as_an_inline_image(monkeypatch):
+    hermes = FakeHermes()
+    _run_group(_photo_message(monkeypatch), _services(FakeChain(), hermes))
+
+    assert hermes.images[0] == ["data:image/jpeg;base64,AAA"]
+
+
+def test_text_only_message_sends_no_images():
+    hermes = FakeHermes()
+    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
+
+    assert not hermes.images[0]
+
+
+# ── 貼圖 ────────────────────────────────────────────────
+
+
+class FakeStickers:
+    def __init__(self, menu: str = "  1｜打招呼"):
+        self._menu = menu
+
+    def menu(self) -> str:
+        return self._menu
+
+    def resolve(self, index: int):
+        if index == 1:
+            return SimpleNamespace(
+                file_id="sticker-1", meaning="打招呼", usage_hint="打招呼"
+            )
+        return None
+
+
+def _sticker_svc(chain, hermes, stickers, bot=None):
+    svc = _services(chain, hermes)
+    svc.stickers = stickers
+    return svc
+
+
+def _mention_with_bot(message_id=500):
+    """同一則訊息，連埋佢自己個 bot —— reply_markdown 用 message.get_bot()。"""
+    bot = FakeBot()
+    return _message(message_id=message_id, bot=bot), bot
+
+
+def test_sticker_menu_is_attached_once_per_conversation():
+    """清單每則都附嘅話，會不斷累積入 Hermes 嘅對話歷史，越傾越貴。"""
+    stickers = FakeStickers()
+    hermes = FakeHermes()
+    svc = _sticker_svc(FakeChain({9001: CONV_A}), hermes, stickers)
+
+    # 兩次都引用本鯨同一則 → 同一條對話
+    _run_group(_message(message_id=950, reply_to=_reply_to_bot(9001)), svc)
+    _run_group(_message(message_id=951, reply_to=_reply_to_bot(9001)), svc)
+
+    assert hermes.calls[0][0] == hermes.calls[1][0] == CONV_A
+    assert "<可用貼圖>" in hermes.calls[0][1], "第一則要附"
+    assert "<可用貼圖>" not in hermes.calls[1][1], "第二則唔可以再附"
+
+
+def test_sticker_menu_is_attached_for_each_new_conversation():
+    stickers = FakeStickers()
+    hermes = FakeHermes()
+    svc = _sticker_svc(FakeChain(), hermes, stickers)
+
+    _run_group(_message(message_id=500), svc)
+    _run_group(_message(message_id=501), svc)
+
+    assert hermes.calls[0][0] != hermes.calls[1][0], "兩條唔同對話"
+    assert "<可用貼圖>" in hermes.calls[0][1]
+    assert "<可用貼圖>" in hermes.calls[1][1]
+
+
+def test_no_menu_block_when_the_library_is_empty():
+    hermes = FakeHermes()
+    _run_group(_message(), _sticker_svc(FakeChain(), hermes, FakeStickers(menu="")))
+
+    assert "<可用貼圖>" not in hermes.calls[0][1]
+
+
+def test_marker_in_the_reply_sends_the_sticker_and_is_stripped():
+    chain = FakeChain()
+    hermes = FakeHermes(text="好呀本鯨幫你睇[[貼圖:1]]")
+    message, bot = _mention_with_bot()
+    svc = _sticker_svc(chain, hermes, FakeStickers())
+
+    _run_group(message, svc, bot)
+
+    assert bot.stickers == [(CHAT, "sticker-1")]
+    assert bot.sent[0][1] == "好呀本鯨幫你睇", "標記唔可以畀使用者見到"
+
+
+def test_sticker_message_is_cached_so_the_chain_survives():
+    """冇補快取嘅話，別人引用嗰張貼圖時條串會斷。"""
+    chain = FakeChain()
+    hermes = FakeHermes(text="睇下[[貼圖:1]]")
+    message, bot = _mention_with_bot()
+    svc = _sticker_svc(chain, hermes, FakeStickers())
+
+    _run_group(message, svc, bot)
+
+    cached = list(chain.replies)
+    assert len(cached) == 2, "回覆一則、貼圖一則"
+    assert cached[1]["message_id"] == 9002
+    assert cached[1]["conversation"] == f"grp:{CHAT}:500"
+    assert "貼圖" in cached[1]["text"], "貼圖嘅快取要有人睇得明嘅描述"
+
+
+def test_unknown_sticker_number_sends_nothing_and_does_not_crash():
+    """模型編錯號 —— 靜靜哋當冇，唔可以拋錯。"""
+    hermes = FakeHermes(text="好[[貼圖:999]]")
+    message, bot = _mention_with_bot()
+    svc = _sticker_svc(FakeChain(), hermes, FakeStickers())
+
+    _run_group(message, svc, bot)
+
+    assert bot.stickers == []
+    assert bot.sent[0][1] == "好"
+
+
+# ── 存取閘 ──────────────────────────────────────────────
+
+
+def _gate_svc(hermes, *, active: bool, admin: bool):
+    """砌一個可以控制「啟用咗未」同「係咪管理員」嘅 services。"""
+    svc = _services(FakeChain(), hermes)
+    svc.is_admin = lambda _uid: admin
+
+    async def _is_active(_uid: int) -> bool:
+        return active
+
+    async def _ensure(*_a, **_k) -> None:
+        return None
+
+    svc.access = SimpleNamespace(ensure=_ensure, is_active=_is_active)
+    return svc
+
+
+def test_unauthorised_user_gets_no_reply_and_costs_nothing():
+    """**冇呢道閘，任何知 bot username 嘅人都燒得起你嘅錢。**"""
+    hermes = FakeHermes()
+    bot = FakeBot()
+    message = _message(message_id=500, bot=bot)
+    _run_group(message, _gate_svc(hermes, active=False, admin=False), bot)
+
+    assert hermes.calls == [], "唔應該叫 Hermes"
+    assert bot.sent == [], "連拒絕都唔應該回 —— 免得變成回音壁"
+
+
+def test_active_user_is_allowed():
+    hermes = FakeHermes()
+    _run_group(
+        _message(message_id=500), _gate_svc(hermes, active=True, admin=False)
+    )
+    assert len(hermes.calls) == 1
+
+
+def test_admin_is_allowed_even_when_not_active():
+    """管理員唔應該被自己個閘鎖住喺外面。"""
+    hermes = FakeHermes()
+    _run_group(
+        _message(message_id=500), _gate_svc(hermes, active=False, admin=True)
+    )
+    assert len(hermes.calls) == 1
+
+
+def test_private_message_from_a_stranger_is_ignored():
+    hermes = FakeHermes()
+    bot = FakeBot()
+    message = _message(chat_type=ChatType.PRIVATE, message_id=1, bot=bot)
+    svc = _gate_svc(hermes, active=False, admin=False)
+
+    asyncio.run(
+        on_private_message(
+            SimpleNamespace(
+                effective_message=message, effective_user=message.from_user
+            ),
+            SimpleNamespace(bot_data={"services": svc}, bot=bot),
+        )
+    )
+
+    assert hermes.calls == []
+    assert bot.sent == []

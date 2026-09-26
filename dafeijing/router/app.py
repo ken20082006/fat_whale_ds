@@ -68,6 +68,8 @@ async def _post_init(application: Application) -> None:
     """Telegram 連上之後才跑 —— 呢度先可以拿 bot 身分。"""
     svc: RouterServices = application.bot_data["services"]
     await svc.db.connect()
+    # 要等 db 連上先讀得到 —— 大肥鯨都係喺 post_init 做。
+    await svc.stickers.load(svc.db)
 
     # 啟動時網路抖動唔應該令 bot 開唔到 —— 重試幾次。
     me = None

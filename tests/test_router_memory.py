@@ -96,9 +96,11 @@ class FakeSessions:
 class FakeHermes:
     def __init__(self):
         self.calls: list[tuple[str, str]] = []
+        self.images: list[list[str] | None] = []
 
-    async def ask(self, conversation: str, text: str) -> Reply:
+    async def ask(self, conversation: str, text: str, images=None) -> Reply:
         self.calls.append((conversation, text))
+        self.images.append(images)
         return Reply(text="收到")
 
 
@@ -172,8 +174,12 @@ def _services(sessions, hermes, memory=None):
         hermes=hermes,
         sessions=sessions,
         memory=memory or FakeMemory(),
+        stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
+        seen_conversations=set(),
         limiter=SimpleNamespace(check=lambda _uid: (True, 0)),
-        access=SimpleNamespace(ensure=ensure),
+        access=SimpleNamespace(
+            ensure=ensure, is_active=lambda _uid: True
+        ),
         is_admin=lambda _uid: True,
         bot_id=BOT_ID,
         bot_name="大肥鯨",

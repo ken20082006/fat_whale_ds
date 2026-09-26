@@ -82,6 +82,15 @@ def _usage(payload: dict[str, Any]) -> tuple[int, int]:
     return int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
 
 
+def _build_input(text: str, images: list[str] | None) -> str | list[dict[str, Any]]:
+    """砌 `input` 欄位。冇圖就係一條字串，有圖就係 Responses 格式嘅陣列。"""
+    if not images:
+        return text
+    content: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
+    content.extend({"type": "input_image", "image_url": url} for url in images)
+    return [{"role": "user", "content": content}]
+
+
 class HermesClient:
     """Hermes API server 嘅薄客戶端。冇狀態 —— 對話狀態喺 Hermes 嗰邊。"""
 
@@ -100,17 +109,38 @@ class HermesClient:
             transport=transport,
         )
 
-    async def ask(self, conversation: str, text: str) -> Reply:
+    async def ask(
+        self, conversation: str, text: str, images: list[str] | None = None
+    ) -> Reply:
         """送一則入去指定嘅 conversation，回傳助理嘅回覆。
 
         `conversation` 係對話名 —— 同一條引用串要**永遠**用同一個名。
+
+        `images` 係 `data:image/...;base64,...` 形式嘅 data URL。有圖時
+        `input` 要由字串改成陣列（OpenAI Responses 格式）：
+
+            {"input": [{"role": "user", "content": [
+                {"type": "input_text", "text": ...},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,..."},
+            ]}]}
+
+        冇圖就照舊送字串 —— 少一層冇必要嘅包裝。
+        （格式見 Hermes `docs/user-guide/features/api-server.md` 嘅
+        「Inline image input」一節；只收 `input_image`，`input_file` 會 400。）
         """
-        body = {"input": text, "conversation": conversation}
+        body = {
+            "input": _build_input(text, images),
+            "conversation": conversation,
+        }
         response = await self._post("/v1/responses", body)
         in_tok, out_tok = _usage(response)
         reply = Reply(text=extract_text(response), input_tokens=in_tok, output_tokens=out_tok)
         logger.info(
-            "Hermes %s ← %d in / %d out", conversation, in_tok, out_tok
+            "Hermes %s ← %d in / %d out%s",
+            conversation,
+            in_tok,
+            out_tok,
+            f"（{len(images)} 張圖）" if images else "",
         )
         return reply
 
