@@ -461,7 +461,9 @@ async def on_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     thread_id = getattr(message, "message_thread_id", None)
-    conversation = dm_conversation(message.chat_id, thread_id)
+    conversation = dm_conversation(
+        message.chat_id, thread_id, getattr(svc, "dm_generation", 0)
+    )
     extras = await _media_extras(context.bot, message, svc)
     images = await _collect_all_images(context.bot, message, svc)
     body, scope, raw = await _body_for(

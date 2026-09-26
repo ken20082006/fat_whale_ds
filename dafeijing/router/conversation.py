@@ -54,13 +54,21 @@ def group_conversation(chat_id: int | str, root_message_id: int) -> str:
     return f"{GROUP_PREFIX}:{chat_id}:{root_message_id}"
 
 
-def dm_conversation(chat_id: int | str, thread_id: int | None = None) -> str:
+def dm_conversation(
+    chat_id: int | str, thread_id: int | None = None, generation: int = 0
+) -> str:
     """私聊對話名。
 
     有 topic（BotFather 開咗 Threaded Mode）就跟 topic 分，
     冇就跟 chat 一條。
+
+    `generation` 由 `/new` 遞增 —— 加咗之後接唔返上一條，
+    即係真係開新對話。為 0（預設）時唔加，維持原本個名。
     """
-    if thread_id is None:
-        return f"{DM_PREFIX}:{chat_id}"
-    return f"{DM_PREFIX}:{chat_id}:{thread_id}"
+    parts = [DM_PREFIX, str(chat_id)]
+    if thread_id is not None:
+        parts.append(str(thread_id))
+    if generation:
+        parts.append(f"g{generation}")
+    return ":".join(parts)
 

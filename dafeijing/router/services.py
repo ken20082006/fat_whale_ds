@@ -53,6 +53,8 @@ class RouterServices:
     errors: int = field(default=0)
     # 邊幾條對話已經附過貼圖清單。純記憶體 —— 重啟後每條再附一次，無害。
     seen_conversations: set[str] = field(default_factory=set)
+    # 私聊嘅「開新對話」世代。/new 會加一，令對話名接唔返上一條。
+    dm_generation: int = 0
 
     def is_admin(self, tg_user_id: int | None) -> bool:
         return self.cfg.is_admin(tg_user_id)

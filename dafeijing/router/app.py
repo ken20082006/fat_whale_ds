@@ -13,6 +13,7 @@ import time
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from ..settings import Settings
+from . import commands
 from .handlers import on_group_message, on_private_message
 from .services import RouterServices, create_services
 
@@ -60,6 +61,9 @@ def build_application(svc: RouterServices, cfg: Settings) -> Application:
             on_private_message,
         )
     )
+    # 指令。大部分直接借大肥鯨嗰啲（見 router/commands.py 開頭嘅解釋）。
+    commands.register(application)
+
     application.add_error_handler(_on_error)
     return application
 

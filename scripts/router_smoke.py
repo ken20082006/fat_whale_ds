@@ -75,8 +75,13 @@ def main() -> int:
         check("建立 Application", True, f"{handlers} 個 handler")
         check(
             "handler 數目正確",
-            handlers == 3,
-            "應該係 3：群組快取、群組回應、私聊",
+            handlers == 18,
+            "應該係 18：3 條訊息路徑（快取、群組、私聊）+ 15 個指令",
+        )
+        check(
+            "群組快取行 group=-1",
+            len(app.handlers.get(-1, [])) == 1,
+            "佢要最先跑，唔可以先被其他 handler 攔截",
         )
     except Exception as exc:  # noqa: BLE001
         check("建立 Application", False, str(exc).splitlines()[0])
