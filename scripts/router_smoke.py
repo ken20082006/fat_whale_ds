@@ -71,12 +71,22 @@ def main() -> int:
     try:
         svc = create_services(cfg)
         app = build_application(svc, cfg)
-        handlers = sum(len(v) for v in app.handlers.values())
-        check("建立 Application", True, f"{handlers} 個 handler")
+
+        from telegram.ext import CommandHandler
+
+        commands = {
+            name
+            for handlers in app.handlers.values()
+            for handler in handlers
+            if isinstance(handler, CommandHandler)
+            for name in handler.commands
+        }
+        check("建立 Application", True, f"{commands.__len__()} 個指令")
         check(
-            "handler 數目正確",
-            handlers == 18,
-            "應該係 18：3 條訊息路徑（快取、群組、私聊）+ 15 個指令",
+            "指令數目正確",
+            len(commands) == 18,
+            "應該係 18：使用者 8 個（start/help/new/context/remember/"
+            "forget/quota/id）+ 管理員 10 個",
         )
         check(
             "群組快取行 group=-1",

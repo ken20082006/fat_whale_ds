@@ -316,6 +316,20 @@ async def _deliver(
         await reply_plain(message, "本鯨這邊出了點狀況，等一下再試。")
         return
 
+    # 記用量。**Hermes 唔回 cost** —— 只有 tokens，所以成本要自己估
+    # （價錢喺 settings.py 嘅 hermes_*_price，係 OpenRouter 嘅實價）。
+    await svc.usage.record(
+        user_id=extract[0] if extract else None,
+        chat_id=message.chat_id,
+        model=svc.cfg.model,
+        prompt_tokens=reply.input_tokens,
+        completion_tokens=reply.output_tokens,
+        cost=(
+            reply.input_tokens / 1_000_000 * svc.cfg.hermes_input_price
+            + reply.output_tokens / 1_000_000 * svc.cfg.hermes_output_price
+        ),
+    )
+
     # 模型想送貼圖就會喺最尾加 [[貼圖:編號]]。要抽走先送出 ——
     # 標記唔可以畀使用者見到，亦唔可以留喺快取同歷史度。
     cleaned, sticker_index = split_marker(reply.text)

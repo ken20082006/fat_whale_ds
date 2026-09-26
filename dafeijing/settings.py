@@ -180,6 +180,18 @@ class Settings(BaseSettings):
     hermes_media_dir: Path = Path("../hermes_ds/data/cache/videos")
     hermes_media_prefix: str = "/opt/data/cache/videos"
 
+    # 成本估算（美元／百萬 token）。
+    #
+    # ⚠️ Hermes 嘅 API **只回 tokens，唔回 cost**，所以 Router 要自己估。
+    # 呢兩個數係 2026-09-26 由 OpenRouter `/v1/models` 攞嘅實價，
+    # 而且對得返 Hermes 自己嘅估算（11968 in + 2 out = $0.0035928，一樣）。
+    #
+    # 換模型就要跟住改 —— 唔改嘅話 `/cost` 會報錯數。準確數字始終喺
+    # Hermes 自己個 `state.db`（`session_model_usage.estimated_cost_usd`），
+    # 但讀佢內部 DB 太脆弱，所以唔做。
+    hermes_input_price: float = 0.30
+    hermes_output_price: float = 1.20
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

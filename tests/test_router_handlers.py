@@ -27,6 +27,10 @@ OTHER_USER = 121
 CONV_A = f"grp:{CHAT}:100"
 
 
+async def _noop_record(**_kw) -> None:
+    return None
+
+
 class FakeChain:
     """`conversations` 模擬 group_cache 入面本鯨嗰幾則回覆嘅對話名。"""
 
@@ -172,11 +176,18 @@ def _services(chain, hermes):
         return []
 
     return SimpleNamespace(
-        cfg=SimpleNamespace(maintenance_mode=False, admin_ids=(USER_ID,)),
+        cfg=SimpleNamespace(
+            maintenance_mode=False,
+            admin_ids=(USER_ID,),
+            model="test/model",
+            hermes_input_price=0.30,
+            hermes_output_price=1.20,
+        ),
         chain=chain,
         hermes=hermes,
         sessions=SimpleNamespace(notes=notes, get_group_profile=_no_profile),
         profiler=SimpleNamespace(schedule=lambda _cid: None),
+        usage=SimpleNamespace(record=_noop_record),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),

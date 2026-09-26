@@ -15,8 +15,9 @@
    `/vibe`、`/think`、`/search` —— 嗰啲控制大肥鯨自己個腦，
    而家個腦係 Hermes（人設喺 SOUL.md，調參喺 Hermes 嘅 config）
 
-`/cost`、`/quota`、`/stats` 亦未註冊 —— 佢哋要 usage_log，
-而 Router 暫時冇記低 Hermes 嘅用量。呢個係下一批。
+`/cost`、`/quota`、`/stats` 註冊咗，但**成本係估算** —— Hermes 嘅 API
+只回 tokens 唔回 cost（準確數字喺 Hermes 自己個 `state.db`，但讀佢內部
+DB 太脆弱）。價錢喺 `settings.py` 嘅 `hermes_*_price`，換模型要跟住改。
 """
 
 from __future__ import annotations
@@ -31,12 +32,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from ..bot.commands import (
     cmd_allowgroup,
     cmd_block,
+    cmd_cost,
     cmd_denygroup,
     cmd_forget,
     cmd_groups,
     cmd_id,
     cmd_invites,
     cmd_issue,
+    cmd_quota,
     cmd_remember,
     cmd_revoke,
     cmd_start,
@@ -135,6 +138,45 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text("好，開新嘅。之前傾過嘅本鯨照樣記得。")
 
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Router 版。大肥鯨嗰版本報「攔下的洩漏」「聯網搜尋」「讀取連結」——
+    嗰啲係大肥鯨自己個腦做嘅嘢，而家喺 Hermes 嗰邊，呢度冇數可以報。
+
+    所以只報 Router 真正知嘅：授權人數、群組快取、錯誤、運行時間。
+    """
+    import time
+
+    from ..bot.commands import admin_only, get_services
+
+    @admin_only
+    async def _run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        svc = get_services(context)
+        active = await svc.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE status = 'active'", default=0
+        )
+        pending = await svc.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE status = 'pending'", default=0
+        )
+        cached = await svc.db.fetchval("SELECT COUNT(*) FROM group_cache", default=0)
+        profiles = await svc.db.fetchval("SELECT COUNT(*) FROM group_profile", default=0)
+        stickers = len(svc.stickers.menu().splitlines()) if svc.stickers.available else 0
+        uptime = int(time.time() - svc.started_at) if svc.started_at else 0
+
+        lines = [
+            "Router 運轉狀態：",
+            f"　已授權使用者　{active}",
+            f"　待驗證　　　　{pending}",
+            f"　群組快取　　　{cached} 則",
+            f"　群組概況　　　{profiles} 個群",
+            f"　精選貼圖　　　{stickers} 張",
+            f"　累計錯誤　　　{svc.errors}",
+            f"　運行時間　　　{uptime // 3600} 小時 {uptime % 3600 // 60} 分",
+        ]
+        await update.effective_message.reply_text("\n".join(lines))
+
+    await _run(update, context)
+
+
 def register(application: Application) -> None:
     """掛上所有 Router 支援嘅指令。"""
     user_commands = (
@@ -144,6 +186,7 @@ def register(application: Application) -> None:
         ("context", cmd_context),
         ("remember", cmd_remember),
         ("forget", cmd_forget),
+        ("quota", cmd_quota),
         ("id", cmd_id),
     )
     admin_commands = (
@@ -155,6 +198,8 @@ def register(application: Application) -> None:
         ("groups", cmd_groups),
         ("block", cmd_block),
         ("unblock", cmd_unblock),
+        ("cost", cmd_cost),
+        ("stats", cmd_stats),
     )
     for name, handler in (*user_commands, *admin_commands):
         application.add_handler(CommandHandler(name, handler))

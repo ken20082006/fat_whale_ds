@@ -23,6 +23,7 @@ from ..core.memory import MemoryExtractor
 from ..core.ratelimit import RateLimiter
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
+from ..core.usage import UsageLog
 from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
@@ -45,6 +46,7 @@ class RouterServices:
     memory: MemoryExtractor
     profiler: GroupProfiler
     stickers: StickerLibrary
+    usage: UsageLog
 
     bot_username: str = ""
     bot_id: int = 0
@@ -87,4 +89,6 @@ def create_services(cfg: Settings) -> RouterServices:
         profiler=GroupProfiler(cfg, sessions, llm),
         # 貼圖庫由 app.py 嘅 post_init 載入（要等 db 連上先讀得到）。
         stickers=StickerLibrary(cfg),
+        # 記低每次 Hermes 呼叫嘅用量 —— Hermes 唔回 cost，所以要自己估。
+        usage=UsageLog(db),
     )

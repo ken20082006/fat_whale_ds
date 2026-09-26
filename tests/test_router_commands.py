@@ -42,6 +42,7 @@ def test_expected_commands_are_registered():
         "context",
         "remember",
         "forget",
+        "quota",
         "id",
         "issue",
         "revoke",
@@ -51,6 +52,8 @@ def test_expected_commands_are_registered():
         "groups",
         "block",
         "unblock",
+        "cost",
+        "stats",
     }
 
 

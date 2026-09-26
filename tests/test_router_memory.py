@@ -28,6 +28,10 @@ USER_ID = 216587605
 # ── 砌筆記區塊 ──────────────────────────────────────────
 
 
+async def _noop_record(**_kw) -> None:
+    return None
+
+
 def test_notes_are_wrapped_in_markers():
     """用標記框住 —— 筆記內容來自對話，唔可以取得「指示」嘅地位。"""
     block = with_notes("你好", ["唔食辣", "住喺香港"])
@@ -178,11 +182,18 @@ def _services(sessions, hermes, memory=None):
         return None
 
     return SimpleNamespace(
-        cfg=SimpleNamespace(maintenance_mode=False, admin_ids=(USER_ID,)),
+        cfg=SimpleNamespace(
+            maintenance_mode=False,
+            admin_ids=(USER_ID,),
+            model="test/model",
+            hermes_input_price=0.30,
+            hermes_output_price=1.20,
+        ),
         chain=FakeChain(),
         hermes=hermes,
         sessions=sessions,
         profiler=SimpleNamespace(schedule=lambda _cid: None),
+        usage=SimpleNamespace(record=_noop_record),
         memory=memory or FakeMemory(),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),
@@ -431,11 +442,18 @@ def _rich_services(sessions, hermes, chain=None):
         return None
 
     return SimpleNamespace(
-        cfg=SimpleNamespace(maintenance_mode=False, admin_ids=(USER_ID,)),
+        cfg=SimpleNamespace(
+            maintenance_mode=False,
+            admin_ids=(USER_ID,),
+            model="test/model",
+            hermes_input_price=0.30,
+            hermes_output_price=1.20,
+        ),
         chain=chain or RosterChain(),
         hermes=hermes,
         sessions=sessions,
         profiler=SimpleNamespace(schedule=lambda _cid: None),
+        usage=SimpleNamespace(record=_noop_record),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),
