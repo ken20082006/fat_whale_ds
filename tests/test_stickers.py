@@ -23,6 +23,19 @@ def test_extract_marker_tolerates_spacing_and_fullwidth_colon():
         assert text == "好喔"
 
 
+def test_extract_marker_accepts_single_brackets():
+    """模型多數寫單括號 —— 提示教雙括號，但實測佢跟唔到。
+
+    收窄返做雙括號嘅話，標記會原封不動送出畀使用者見到（2026-09-26 真實事故：
+    連續三則回覆尾都掛住 `[貼圖:178]`，而 178 係合法嘅精選貼圖）。
+    """
+    for raw in ("[貼圖:178]", "[ 貼圖 ： 178 ]"):
+        text, index = extract_marker(f"係聽返嚟嘅。{raw}")
+        assert index == 178, raw
+        assert text == "係聽返嚟嘅。"
+        assert "貼圖" not in text
+
+
 def test_extract_marker_absent():
     text, index = extract_marker("就是一段普通的回覆")
     assert text == "就是一段普通的回覆"

@@ -183,6 +183,9 @@ def _services(chain, hermes):
             hermes_input_price=0.30,
             hermes_output_price=1.20,
             allow_bots=False,
+            # Router 出錯訊息會講自己個名（見 settings.self_name）。
+            # 大肥鯨嗰個預設值，所以下面啲斷言照舊。
+            self_name="本鯨",
         ),
         chain=chain,
         hermes=hermes,

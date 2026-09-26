@@ -39,3 +39,18 @@ hermes/data/*
 !hermes/data/config.yaml
 
 hermes/__pycache__/
+
+# ── belfast/（貝爾法斯特嘅 Hermes 家）────────────────
+#
+# 同 hermes/ 一樣嘅取捨：**只追人設同設定兩個檔**。其餘係執行期狀態。
+#
+# 注意同 hermes 一樣要用 `data/*` 而唔係 `data/` —— 後者會連目錄都
+# ignore 埋，git 唔會行入去，下面兩個 negation 就冇效。
+#
+# `belfast/persona.md`、`build_soul.py`、`docker-compose.yml`、`README.md`
+# 唔使特別寫：上面冇任何 pattern 食到佢哋。
+belfast/data/*
+!belfast/data/SOUL.md
+!belfast/data/config.yaml
+
+belfast/__pycache__/

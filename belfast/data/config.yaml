@@ -1,0 +1,156 @@
+# Hermes Agent 設定 —— 貝爾法斯特
+#
+# 由 `../hermes/data/config.yaml` 抄形狀。**唔係角色設定**，係「呢個 bot
+# 喺 Hermes 上面點運作」—— 所以同大肥鯨一致嘅部分刻意照跟（關思考、削工具、
+# 答得快）。真係唔同嘅只有下面標咗 ⚠️ 嗰幾處。
+#
+# 只放**非機密**設定。金鑰同 bot token 一律喺 .env（見 data/.env）。
+# 規則：secrets 去 .env，其餘去呢個檔。
+
+# ⚠️ **唔同大肥鯨。** 大肥鯨行 OpenRouter / deepseek-v4.1-flash；
+# 貝爾法斯特行 xAI / grok-4.20（non-reasoning）。
+#
+# Provider 唔使寫死 —— Hermes 見到 XAI_API_KEY 就判定係 xai
+# （base URL https://api.x.ai/v1，`hermes status` 會顯示）。
+#
+# 演變：`grok-4-fast`（呢條 key 冇開）→ `grok-4.3` → `grok-4.7`
+# → **`grok-4.20-non-reasoning`**。換走 4.7 係因為實測慢（用戶原話
+# 「咁慢既, 4.7」）：4.7 行 reasoning，而 4.20 non-reasoning 係清單入面
+# **唯一明確唔思考**嘅版本 —— 最貼近成套「答得快」嘅調校，亦最平。
+#
+# 用帶日期嘅 id 而唔用 alias `grok-4.20-non-reasoning`：alias 會飄。
+#
+# ⚠️ 仍然貴過大肥鯨：deepseek 係 $0.14/$0.42，grok-4.20 係 $1.25/$2.50
+# —— 輸入 8.9×、輸出 6×。1M context，超過 200K 之後輸入倍上 $2.50。
+model: grok-4.20-0309-non-reasoning
+
+platforms:
+  telegram:
+    # ⚠️ **一定要係 false。**
+    #
+    # Hermes 而家只做腦 —— 對話由 Router（dafeijing/router）經 API server
+    # 送入嚟，Telegram 由 Router 揸。同大肥鯨一樣。
+    #
+    # 兩邊一齊 polling 同一個 token 會 409，而且 Hermes 會**主動踢走**
+    # 爭 getUpdates 嘅對手（官方文件："Conflict recovery still drops pending
+    # updates to terminate the competing getUpdates session"）。
+    #
+    # 呢個 key 係 authoritative —— 環境變數蓋唔過佢。
+    enabled: false
+
+    # 留住：Hermes 送 cron 結果同主動訊息時用。Telegram 關咗就暫時冇用。
+    home_channel:
+      platform: telegram
+      chat_id: '-5303991392'
+      name: belfast
+      user_id: '216587605'
+
+_config_version: 46
+onboarding:
+  seen:
+    busy_input_prompt: true
+agent:
+  # ⚠️ **唔可以照抄大肥鯨嗰個 "none"。**
+  #
+  # xAI 呢條 route 唔收 "none"，傳咗會被丟棄、反而變返預設。實測 log：
+  #   reasoning_effort: none cannot be sent for grok-4.x — its route accepts
+  #   only low, medium, high, so the model's default effort stays on
+  #   (an omitted reasoning field does not disable it).
+  #
+  # "low" 係有效值，亦最接近「唔要思考」。（大肥鯨行 deepseek，
+  # 佢個 "none" 係真嘅關掉 —— 所以呢度係兩者其中一個實質差別。）
+  reasoning_effort: "low"
+display:
+  # 移除思考過程貼出。
+  show_reasoning: false
+platform_toolsets:
+  cli:
+    - memory
+    - skills
+    - video
+    - vision
+    - web
+  api_server:
+    - memory
+    - skills
+    - video
+    - vision
+    - web
+known_plugin_toolsets:
+  cli:
+    - a2a
+    - spotify
+  api_server:
+    - a2a
+    - spotify
+known_builtin_toolsets:
+  cli:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - connections
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - session_search
+    - skills
+    - spotify
+    - stt
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search
+    - yuanbao
+  api_server:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - connections
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - session_search
+    - skills
+    - spotify
+    - stt
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search
+    - yuanbao
+
+# ⚠️ **唔可以照抄大肥鯨嗰個 OpenRouter 嘅 bytedance-seed/seed-2.0-mini。**
+# 呢隻 bot 冇 OPENROUTER_API_KEY（只有 XAI_API_KEY）。照搬嘅話 logs 會出
+# "Auxiliary client: PAID lane engaged … OpenRouter fallback"，而睇圖／睇片
+# 會靜靜哋失敗。全部轉做 xAI。
+auxiliary:
+  video:
+    model: grok-4.20-0309-non-reasoning
+    provider: xai
+  vision:
+    model: grok-4.20-0309-non-reasoning
+    provider: xai

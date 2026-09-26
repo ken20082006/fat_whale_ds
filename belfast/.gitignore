@@ -1,0 +1,26 @@
+# 貝爾法斯特嘅 Hermes 狀態。同 ../hermes/.gitignore 一樣嘅取捨。
+#
+# ⚠️ 呢個檔係俾 `git status` 睇嘅補充；真正管 `belfast/data/*` 嘅係
+# repo 根嗰個 .gitignore（見根檔最後嗰段）。兩邊都要有，唔好刪。
+
+data/.env
+data/auth.json
+
+# 執行期狀態 —— 唔入 git
+logs/
+data/sessions/
+data/memories/
+data/skills/
+data/cron/
+data/logs/
+data/images/
+data/cache/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# 人設同設定刻意保留：
+#   belfast/persona.md          手寫人設本體
+#   belfast/build_soul.py       生成器
+#   belfast/data/SOUL.md        生成物（部署到另一部機唔想先跑 script）
+#   belfast/data/config.yaml    設定

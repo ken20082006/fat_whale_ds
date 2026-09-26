@@ -1,27 +1,52 @@
+# 整套系統一個 compose —— 四個 service。
+#
+#   hermes          大肥鯨個腦（Hermes Agent）
+#   router          大肥鯨個外殼（dafeijing/router）
+#   belfast         貝爾法斯特個腦
+#   router-belfast  貝爾法斯特個外殼
+#
+# ```
+# Telegram → router → hermes  ─┐
+# Telegram → router-belfast → belfast ─┴→ OpenRouter / xAI
+# ```
+#
+# ## 為什麼 Router 唔再喺主機行
+#
+# 以前係「Docker（腦）+ 主機 process（外殼）」，兩邊要各自開、各自睇。
+# 收埋一個 compose 之後 `restart: unless-stopped` 會自己處理重啟，
+# 唔使再靠看守程序或者某個 session 開住個 shell。
+#
+# ## 網絡
+#
+# 四個 service 都喺同一個 default network，所以 Router 直接叫 service name：
+# `http://hermes:8642`、`http://belfast:8642`。
+#
+# ⚠️ **一定要蓋過 `.env.router` 嗰個 `FW_HERMES_URL`** —— 主機上寫
+# `http://127.0.0.1:8642` 係啱嘅，但喺容器入面 `127.0.0.1` 係佢自己，
+# 連唔到 Hermes。見下面 `environment:` 嗰兩行。
+#
+# 主機 port 仍然開住（只綁 127.0.0.1）—— 純粹為咗主機側除錯同
+# `scripts/router_smoke.py`，Router 本身唔經。
+
 services:
-  fatwhale:
-    build: .
-    container_name: fatwhale
+  # ── 大肥鯨 ─────────────────────────────────────────
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
     restart: unless-stopped
 
-    # 金鑰與設定。這個檔案不進版控。
-    # 變數以環境變數注入，所以 .env 不需要進映像檔。
-    env_file:
-      - .env
-
-    environment:
-      # 不設的話容器用 UTC，日誌時間會與主機差 8 小時，比對時很混亂。
-      # 資料庫的時間戳一律存 UTC（程式自己處理），這裡只影響日誌顯示。
-      - TZ=${TZ:-Asia/Hong_Kong}
-
-    # PID 1 交給 tini 處理訊號與回收殭屍程序
-    init: true
+    # gateway run 由 s6-overlay 監管：掛咗兩秒內自己起返。
+    command: ["gateway", "run"]
 
     volumes:
-      - ./data:/app/data                       # SQLite
-      - ./logs:/app/logs                       # 日誌
-      - ./backups:/app/backups                 # 備份快照
-      - ./config/persona.md:/app/config/persona.md:ro   # 人設，不進映像檔
+      - ./hermes/data:/opt/data
+
+    # 只綁 127.0.0.1 —— 唔好開出公網。
+    ports:
+      - "127.0.0.1:8642:8642"
+
+    environment:
+      - TZ=${TZ:-Asia/Hong_Kong}
 
     logging:
       driver: json-file
@@ -29,4 +54,121 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # bot 不需要對外開埠，只用 long polling
+  router:
+    build: .
+    container_name: router
+    restart: unless-stopped
+
+    # ⚠️ **行 root，唔用 image 預設嘅 `whale`（uid 1000）。**
+    #
+    # Router 要寫入三個 host 目錄，擁有者唔同：
+    #   ./data、./logs                      root:root 777   → 任何 uid 都得
+    #   ./hermes/data/cache/videos          uid 10000 755   → 只有 10000 寫得入
+    #   ./belfast/data（router-belfast）    uid 10000 700   → 只有 10000 入得去
+    #
+    # 後兩者係 **Hermes 容器自己建**嘅（Hermes 內部行 uid 10000），
+    # 而 700 連讀都唔得。行 root 係最簡單而又唔使 chown 嚟 chown 去嘅做法
+    # —— 兩隻 bot 嘅檔案擁有者唔一致，硬砌一個 uid 只會兩邊都撞。
+    #
+    # 呢個容器冇對外開任何 port（只係出去 polling Telegram），所以風險有限。
+    user: "0:0"
+
+    # CWD = repo 根 → `settings.py` 嘅 `env_file=".env"` 讀到 .env（共用調校）
+    working_dir: /app
+
+    # 同主機一樣嘅分工：`.env` 提供共用調校，`.env.router` 蓋過佢。
+    env_file:
+      - .env
+      - .env.router
+
+    environment:
+      - TZ=${TZ:-Asia/Hong_Kong}
+      - PYTHONIOENCODING=utf-8
+      # ⚠️ 見檔頭。容器入面 127.0.0.1 係自己，一定要改做 service name。
+      - FW_HERMES_URL=http://hermes:8642
+
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # 影片：Router 寫入呢度，Hermes 由自己個 /opt/data/cache/videos 讀返。
+      # （Hermes 掛 ./hermes/data → /opt/data，所以路徑對得上。）
+      - ./hermes/data/cache/videos:/app/hermes/data/cache/videos
+
+    depends_on:
+      - hermes
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 貝爾法斯特 ─────────────────────────────────────
+  belfast:
+    image: nousresearch/hermes-agent:latest
+    container_name: belfast
+    restart: unless-stopped
+    command: ["gateway", "run"]
+
+    volumes:
+      - ./belfast/data:/opt/data
+
+    # ⚠️ 主機 8643 → 容器 8642。容器內部一律聽 8642
+    # （Hermes 冇「改 port」嘅設定），所以避開大肥鯨靠主機側映射。
+    ports:
+      - "127.0.0.1:8643:8642"
+
+    environment:
+      - TZ=${TZ:-Asia/Hong_Kong}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  router-belfast:
+    build: .
+    container_name: router-belfast
+    restart: unless-stopped
+
+    # ⚠️ 行 root —— 原因同上面 `router` 一樣（`belfast/data` 係 uid 10000、700，
+    # Router 要喺入面建 `router.db` 同寫影片 cache）。
+    user: "0:0"
+
+    # ⚠️ CWD = belfast/ → 嗰度冇 `.env` → **零繼承**。
+    # 兩隻 bot 係兩套嘢，唔應該透過 `.env` 互相影響（尤其 token 同 API key）。
+    # 代價：belfast/.env.router 要填齊所有 FW_。
+    working_dir: /app/belfast
+
+    env_file:
+      - belfast/.env.router
+
+    environment:
+      - TZ=${TZ:-Asia/Hong_Kong}
+      - PYTHONIOENCODING=utf-8
+      # ⚠️ 同上：容器入面 127.0.0.1 係自己。
+      - FW_HERMES_URL=http://belfast:8642
+      # working_dir 唔係 repo 根，`-m dafeijing.router.main` 要搵到 package。
+      - PYTHONPATH=/app
+
+    volumes:
+      # Router 個 DB（belfast/data/router.db）同影片 cache 都喺呢個目錄下面，
+      # 所以掛成個 data/ —— Hermes 自己都掛住同一個 host 目錄。
+      - ./belfast/data:/app/belfast/data
+      - ./belfast/logs:/app/belfast/logs
+
+    depends_on:
+      - belfast
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ⚠️ Docker 版**唔支援 `hermes update`** —— 更新係 pull 新 image 再 up：
+#     docker compose pull && docker compose up -d
+#
+# ⚠️ Router 個 image 係 build 出嚟嘅，改咗 dafeijing/ 之後要重建：
+#     docker compose up -d --build router router-belfast

@@ -314,7 +314,9 @@ async def _deliver(
     except HermesError as exc:
         logger.warning("Hermes 失敗（%s）：%s", conversation, exc)
         svc.errors += 1
-        await reply_plain(message, "本鯨這邊出了點狀況，等一下再試。")
+        await reply_plain(
+            message, f"{svc.cfg.self_name}這邊出了點狀況，等一下再試。"
+        )
         return
 
     # 記用量。**Hermes 唔回 cost** —— 只有 tokens，所以成本要自己估

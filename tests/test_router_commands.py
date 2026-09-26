@@ -20,6 +20,16 @@ CHAT = -1001324180809
 USER_ID = 216587605
 
 
+def _fake_cfg(self_name: str = "本鯨") -> SimpleNamespace:
+    """`RouterServices.cfg` 嘅最小替身。
+
+    真嘅 `RouterServices` 一定有 `cfg`（見 services.py），指令靠佢攞
+    `self_name` —— Router 係兩隻 bot 共用嘅代碼，角色名由設定帶入。
+    預設值同大肥鯨一樣，所以下面啲斷言照舊成立。
+    """
+    return SimpleNamespace(self_name=self_name)
+
+
 # ── 註冊 ────────────────────────────────────────────────
 
 
@@ -71,7 +81,7 @@ def test_commands_that_would_lie_are_not_registered():
 # ── /help ───────────────────────────────────────────────
 
 
-def _help_text(is_admin: bool) -> str:
+def _help_text(is_admin: bool, self_name: str = "本鯨") -> str:
     sent: list[str] = []
 
     async def reply_text(text, **_kw):
@@ -81,7 +91,7 @@ def _help_text(is_admin: bool) -> str:
         effective_user=SimpleNamespace(id=USER_ID),
         effective_message=SimpleNamespace(reply_text=reply_text),
     )
-    svc = SimpleNamespace(is_admin=lambda _uid: is_admin)
+    svc = SimpleNamespace(is_admin=lambda _uid: is_admin, cfg=_fake_cfg(self_name))
     context = SimpleNamespace(bot_data={"services": svc})
 
     asyncio.run(cmd_help(update, context))
@@ -100,6 +110,17 @@ def test_help_hides_admin_section_from_normal_users():
 
 def test_help_shows_admin_section_to_admins():
     assert "/issue" in _help_text(is_admin=True)
+
+
+def test_help_uses_the_configured_self_name():
+    """`self_name` 令同一份 Router 代碼服務唔同角色（見 settings.self_name）。
+
+    大肥鯨唔填就係「本鯨」；貝爾法斯特填「貝爾法斯特」。
+    """
+    assert "本鯨識呢幾樣" in _help_text(is_admin=False)
+    text = _help_text(is_admin=False, self_name="貝爾法斯特")
+    assert "貝爾法斯特識呢幾樣" in text
+    assert "本鯨" not in text
 
 
 def test_help_does_not_mention_commands_that_do_not_exist():
@@ -133,6 +154,7 @@ def _context_text(counts):
         access=SimpleNamespace(is_active=is_active),
         is_admin=lambda _uid: False,
         bot_username="deepseek_girl_bot",
+        cfg=_fake_cfg(),
     )
     context = SimpleNamespace(bot_data={"services": svc})
 
@@ -177,6 +199,7 @@ def _run_new(chat_type):
         is_admin=lambda _uid: True,
         bot_username="deepseek_girl_bot",
         dm_generation=0,
+        cfg=_fake_cfg(),
     )
     context = SimpleNamespace(bot_data={"services": svc})
 

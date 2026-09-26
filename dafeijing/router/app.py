@@ -12,7 +12,7 @@ import time
 
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
-from ..settings import Settings
+from ..settings import Settings, get_settings
 from . import commands
 from .handlers import on_group_message, on_private_message
 from .services import RouterServices, create_services
@@ -151,4 +151,8 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     from .ui import reply_plain
 
-    await reply_plain(message, "本鯨這邊出了點狀況，等一下再試。")
+    # 呢個係全域錯誤處理器，`svc` 可能攞唔到（上面 try 撈咗），
+    # 所以由 settings 直接讀，唔靠 svc。
+    await reply_plain(
+        message, f"{get_settings().self_name}這邊出了點狀況，等一下再試。"
+    )

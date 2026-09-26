@@ -206,6 +206,14 @@ class Settings(BaseSettings):
     conversation_max_calls: int = 30
     conversation_window_seconds: float = 300.0
 
+    # ── 身份 ──
+    # Router 自己講自己嗰陣用嘅名：/help、/context、/new、邀請碼、出錯訊息。
+    #
+    # **角色本身唔喺呢度。** 人設喺 Hermes 嗰邊嘅 SOUL.md，呢個只係
+    # Router 出嘅字。Router 係兩隻 bot 共用嘅代碼，唔應該綁死其中一隻嘅角色
+    # —— 所以由設定帶入，預設值就係大肥鯨原本寫死嗰個，唔填行為完全一樣。
+    self_name: str = "本鯨"
+
     # ── 路徑 ──
     persona_file: Path = Path("config/persona.md")
     db_path: Path = Path("data/fatwhale.db")

@@ -47,12 +47,21 @@ still drops pending updates to terminate the competing getUpdates session"*）�
 
 ### 4. 起
 
+⚠️ **呢個目錄冇 `docker-compose.yml` 喇。** 成套系統（兩個腦 + 兩個 Router）
+收埋喺 **repo 根** 嗰個 compose —— 由 2026-09-26 起。
+
 ```bash
+cd C:\ds\fat_whale_ds          # ← repo 根，唔係 hermes/
 docker compose up -d
-docker compose logs -f
+docker compose logs -f hermes
 ```
 
-見到 `Telegram adapter connected` 就成功。
+見到 `Telegram adapter connected` 就……**其實唔應該見到** ——
+`config.yaml` 係 `enabled: false`，Telegram 由 Router 揸。
+見到即係兩邊爭 `getUpdates`（409）。
+
+正確嘅成功訊號係 **Router** 嗰邊：`docker compose logs -f router`
+見到 `Router 上線：@deepseek_girl_bot｜Hermes http://hermes:8642`。
 
 ## 兩個要記住嘅差異
 
@@ -74,7 +83,10 @@ Hermes 開咗呢個之後，旁觀到嘅閒聊會喺你被 @ 之後一齊入 con
 | `data/config.yaml` | ✅ | 非機密設定 |
 | `data/.env` | ❌ | 金鑰同 token |
 | `data/{sessions,memories,skills,logs}/` | ❌ | 隨使用不斷變，入 git 只會製造衝突 |
-| `docker-compose.yml` | ✅ | |
+
+Container 嘅定義**唔喺呢度** —— 喺 repo 根 `docker-compose.yml`（`hermes` service）。
+原本呢個目錄嗰個 compose 已經刪咗（2026-09-26）—— 兩個並存會整出兩套
+同名 container，而且兩邊都想揸 port 8642。
 
 ## SOUL.md 係點嚟
 

@@ -65,7 +65,7 @@ async def ensure_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     if svc.is_admin(user.id) or await svc.access.is_active(user.id):
         return True
     await update.effective_message.reply_text(
-        f"本鯨只認得被邀請的人。\n請輸入邀請碼，或用邀請連結開啟：\n"
+        f"{svc.cfg.self_name}只認得被邀請的人。\n請輸入邀請碼，或用邀請連結開啟：\n"
         f"https://t.me/{svc.bot_username}?start=<你的邀請碼>"
     )
     return False
@@ -110,10 +110,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if payload:
         result = await svc.access.redeem(user.id, payload, user.full_name, user.username)
+        name = svc.cfg.self_name
         replies = {
-            RedeemStatus.OK: "邀請碼確認。本鯨記住你了，說吧，要什麼。",
+            RedeemStatus.OK: f"邀請碼確認。{name}記住你了，說吧，要什麼。",
             RedeemStatus.ALREADY_ACTIVE: "你本來就在名單上，不用再刷一次。",
-            RedeemStatus.INVALID: "這串碼本鯨不認得。確認一下有沒有打錯。",
+            RedeemStatus.INVALID: f"這串碼{name}不認得。確認一下有沒有打錯。",
             RedeemStatus.REVOKED: "這張邀請碼已經被撤銷了。",
             RedeemStatus.EXPIRED: "這張邀請碼過期了，找邀請你的人再要一張。",
             RedeemStatus.ALREADY_BOUND: "這張邀請碼已經綁給別人了。",
@@ -127,7 +128,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         await message.reply_text(
-            "本鯨是私人養的，不隨便接客。\n"
+            f"{svc.cfg.self_name}是私人養的，不隨便接客。\n"
             "請輸入邀請碼，或直接點邀請連結進來。"
         )
 
@@ -260,7 +261,9 @@ async def cmd_allowgroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = int(context.args[0]) if context.args and context.args[0].lstrip("-").isdigit() else update.effective_chat.id
     ok = await svc.access.set_group_allowed(chat_id, True)
     await update.effective_message.reply_text(
-        f"群組 {chat_id} 已授權。" if ok else f"沒有 {chat_id} 的紀錄，先把本鯨拉進那個群組。"
+        f"群組 {chat_id} 已授權。"
+        if ok
+        else f"沒有 {chat_id} 的紀錄，先把{svc.cfg.self_name}拉進那個群組。"
     )
 
 
@@ -328,7 +331,7 @@ async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     month = await svc.usage.user_summary(user.id, days=30)
 
     await update.effective_message.reply_text(
-        "本鯨今天的食量：\n"
+        f"{svc.cfg.self_name}今天的食量：\n"
         f"　{today.get('calls', 0)} 次呼叫，{today.get('total_tokens', 0):,} token\n\n"
         "近 30 天：\n"
         f"　{month.get('calls', 0)} 次呼叫，{month.get('total_tokens', 0):,} token\n"
@@ -365,18 +368,21 @@ async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 
-_USER_HELP = (
-    "本鯨識呢幾樣：\n"
-    "\n"
-    "  /new — 開新對話（私聊）\n"
-    "  /context — 睇下本鯨記得你啲乜\n"
-    "  /remember <嘢> — 叫本鯨記住一件事\n"
-    "  /forget — 清走筆記（加 all 清晒全部場合）\n"
-    "  /id — 睇你嘅 user id\n"
-    "  /help — 呢個表\n"
-    "\n"
-    "直接講嘢就得，唔使指令。@ 本鯨或者回覆本鯨嘅訊息就得。"
-)
+def _user_help(name: str) -> str:
+    """使用者指令表。`name` 係 `cfg.self_name` —— 唔可以寫死做角色名，
+    呢份代碼兩隻 bot 共用（見 settings.self_name 嘅解釋）。"""
+    return (
+        f"{name}識呢幾樣：\n"
+        "\n"
+        "  /new — 開新對話（私聊）\n"
+        f"  /context — 睇下{name}記得你啲乜\n"
+        f"  /remember <嘢> — 叫{name}記住一件事\n"
+        "  /forget — 清走筆記（加 all 清晒全部場合）\n"
+        "  /id — 睇你嘅 user id\n"
+        "  /help — 呢個表\n"
+        "\n"
+        f"直接講嘢就得，唔使指令。@ {name}或者回覆{name}嘅訊息就得。"
+    )
 
 
 
@@ -401,7 +407,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     svc = get_services(context)
     user = update.effective_user
-    text = _USER_HELP
+    text = _user_help(svc.cfg.self_name)
     if user is not None and svc.is_admin(user.id):
         text += _ADMIN_HELP
     await update.effective_message.reply_text(text)
@@ -422,10 +428,10 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     counts = await svc.sessions.note_counts(user.id)
     if not counts:
-        body = "本鯨而家冇你嘅筆記。"
+        body = f"{svc.cfg.self_name}而家冇你嘅筆記。"
     else:
         lines = [f"  {scope} — {n} 則" for scope, n in counts]
-        body = "本鯨記得你嘅嘢：\n" + "\n".join(lines)
+        body = f"{svc.cfg.self_name}記得你嘅嘢：\n" + "\n".join(lines)
 
     await update.effective_message.reply_text(
         body
@@ -452,14 +458,14 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if chat.type != ChatType.PRIVATE:
         await message.reply_text(
-            "群組唔使呢個指令 —— 唔引用任何嘢 @ 本鯨就已經開新對話。\n"
-            "想續返之前嗰條，就引用本鯨嘅回覆。"
+            f"群組唔使呢個指令 —— 唔引用任何嘢 @ {svc.cfg.self_name}就已經開新對話。\n"
+            f"想續返之前嗰條，就引用{svc.cfg.self_name}嘅回覆。"
         )
         return
 
     # 私聊嘅對話名加一個序號，令佢接唔返上一條。
     svc.dm_generation = getattr(svc, "dm_generation", 0) + 1
-    await message.reply_text("好，開新嘅。之前傾過嘅本鯨照樣記得。")
+    await message.reply_text(f"好，開新嘅。之前傾過嘅{svc.cfg.self_name}照樣記得。")
 
 
 
