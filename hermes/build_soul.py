@@ -59,29 +59,9 @@ FRAMING = """\
 照查 —— 嗰種查係答案嘅一部分，唔係拖時間。
 """
 
-# 冇呢一節，模型會用內建知識答近期嘅事，或者反問「你想我幫你查下？」。
-# 實測：問「今日恆指幾點」，佢回「本鯨真係唔知喎，你想我而家幫你查下？」——
-# 明明有 web_search 都唔用。加咗指示之後即刻自己去查。
-#
-# 大肥鯨原本有對應嘅機制（core/persona.py 嘅 _capability_block 同
-# 搜尋政策），搬過 Hermes 嗰時漏咗。
-SEARCH_RULE = """\
-### 幾時一定要查
-
-你嘅內建知識有一個截止日期。**講到會隨時間變嘅嘢，一律去查，唔好靠記憶答。**
-
-要查嘅包括：
-- 日期、時間、天氣
-- 價錢、股價、匯率、指數
-- 「今日」「今朝」「而家」「最新」「近排」開頭嘅問題
-- 邊個人而家係乜嘢職位、邊件事最新發展成點
-- 任何你唔肯定而對方明顯想要準確答案嘅嘢
-
-**唔好問准，直接查。** 唔好講「你想我幫你查下？」或者「要唔要我查？」——
-嗰句只係多一次來回。查完照答就得，唔使解釋你查過，除非對方問。
-
-查完如果結果夾雜舊數據（例如搵到唔同日子嘅價），要指明係邊一日嘅數字。
-"""
+# ⚠️ `SEARCH_RULE`（幾時一定要查）同 `_GUESS_RULE`（估嘅要講明係估）
+# 2026-09-27 搬咗去 `persona_rules.py` —— 貝爾法斯特嗰邊有一份逐字相同嘅
+# 副本，留兩份只會改漏一邊。呢兩節對兩隻 bot 都成立。
 
 # 講明 <筆記> 係乜。冇呢節，模型會將筆記當成對話內容、或者索性唔理。
 # 格式由 router 嘅 dafeijing/router/memory.py 產生。
@@ -196,8 +176,10 @@ def main() -> int:
     # core/persona.py，但舊版退咗役之後無謂隔一個 repo 借）。
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from persona_rules import (  # noqa: PLC0415
+        _GUESS_RULE,
         _LENGTH_RULE,
         _MEDIA_RULE,
+        _SEARCH_RULE,
         _SECURITY_RULE,
     )
 
@@ -210,7 +192,8 @@ def main() -> int:
     parts = [
         body,
         FRAMING.strip(),
-        SEARCH_RULE.strip(),
+        _SEARCH_RULE.strip(),
+        _GUESS_RULE.strip(),
         NOTES_RULE.strip(),
         MEDIA_BRIDGE.strip(),
         ATTRIBUTION.strip(),
@@ -225,7 +208,7 @@ def main() -> int:
     print(f"寫入 {DEST}（{len(out)} 字元）")
     for label, text in zip(
         (
-            "人設本體", "framing", "查證", "記憶", "媒體橋接",
+            "人設本體", "framing", "查證", "估與推", "記憶", "媒體橋接",
             "標註格式", "長度", "媒體", "安全界線", "後台",
         ),
         parts,

@@ -30,8 +30,9 @@ Telegram → Router（dafeijing/router）→ Hermes API → 回覆
 
 ```
 persona.md（手寫，角色本體）
-  + ../hermes/persona_rules.py 嘅三節（長度／媒體／安全界線）
-  + build_soul.py 入面嘅 Hermes framing（6 節）
+  + ../hermes/persona_rules.py 嘅五節
+    （查證／估與推／長度／媒體／安全界線）
+  + build_soul.py 入面嘅 Hermes framing（5 節）
   = data/SOUL.md
 ```
 
@@ -44,7 +45,11 @@ cd C:\ds\fat_whale_ds
 
 規則照樣 **import 大肥鯨嗰份**（`../hermes/persona_rules.py`），**唔複製** ——
 `_SECURITY_RULE` 係反 prompt injection 嘅唯一防線，兩隻 bot 必須逐字一致。
-實測長度 6,357 字元。
+實測長度 6,870 字元（2026-09-27）。
+
+2026-09-27：`SEARCH_RULE`（幾時一定要查）由兩個 `build_soul.py` 各自一份
+**合併**上 `persona_rules.py`，同新加嘅 `_GUESS_RULE`（估嘅要講明係估）
+一齊 import —— 原本兩份逐字相同，改嗰陣一定會漏一邊。
 
 `build_soul.py` 只換走兩處大肥鯨專屬嘅字：
 `MEDIA_BRIDGE` 嘅「本鯨睇唔到」→「我睇唔到」，同 `_MEDIA_RULE` 尾段嗰句

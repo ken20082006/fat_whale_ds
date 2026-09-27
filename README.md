@@ -389,8 +389,9 @@ dafeijing/
 
 **要睇舊版**：`legacy-fatwhale` branch（純大肥鯨，自己打 OpenRouter）。
 
-人設規則（長度、媒體、安全界線）搬咗去 `hermes/persona_rules.py`，
-由 `build_soul.py` 讀 —— SOUL.md 完全由 `hermes_ds` 話事，唔使隔一個 repo 借。
+人設規則（查證、估與推、長度、媒體、安全界線）搬咗去
+`hermes/persona_rules.py`，由 `build_soul.py` 讀 ——
+SOUL.md 完全由 `hermes_ds` 話事，唔使隔一個 repo 借。
 
 設計原則：人設喺 `SOUL.md`（Hermes 側），同程式碼完全解耦；
 所有可調參數集中在 `dafeijing/settings.py`。

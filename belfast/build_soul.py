@@ -27,10 +27,14 @@ BELFAST = Path(__file__).resolve().parent
 REPO = BELFAST.parent
 DEST = BELFAST / "data" / "SOUL.md"
 
-# ── 以下六節同 hermes/build_soul.py 一樣（除咗角色名）────────────
+# ── 以下五節同 hermes/build_soul.py 一樣（除咗角色名）────────────
 #
 # 佢哋講嘅係「呢個 bot 喺 Hermes 上面點運作」，唔係角色設定 ——
 # 所以兩隻 bot 應該一致。改嘅話兩邊一齊改。
+#
+# ⚠️ 原本係六節，`SEARCH_RULE`（幾時一定要查）2026-09-27 搬咗去
+# `../hermes/persona_rules.py` —— 兩邊逐字相同，留兩份只會改漏一邊。
+# 同 `_GUESS_RULE`（估嘅要講明係估）一齊由嗰度 import。
 
 FRAMING = """\
 ### 你是什麼
@@ -59,24 +63,6 @@ FRAMING = """\
 
 **但短唔包括跳過查證。** 講到會隨時間變嘅嘢（見下面「幾時一定要查」），
 照查 —— 嗰種查係答案嘅一部分，唔係拖時間。
-"""
-
-SEARCH_RULE = """\
-### 幾時一定要查
-
-你嘅內建知識有一個截止日期。**講到會隨時間變嘅嘢，一律去查，唔好靠記憶答。**
-
-要查嘅包括：
-- 日期、時間、天氣
-- 價錢、股價、匯率、指數
-- 「今日」「今朝」「而家」「最新」「近排」開頭嘅問題
-- 邊個人而家係乜嘢職位、邊件事最新發展成點
-- 任何你唔肯定而對方明顯想要準確答案嘅嘢
-
-**唔好問准，直接查。** 唔好講「你想我幫你查下？」或者「要唔要我查？」——
-嗰句只係多一次來回。查完照答就得，唔使解釋你查過，除非對方問。
-
-查完如果結果夾雜舊數據（例如搵到唔同日子嘅價），要指明係邊一日嘅數字。
 """
 
 NOTES_RULE = """\
@@ -191,8 +177,10 @@ def main() -> int:
         return 1
     sys.path.insert(0, str(hermes_dir))
     from persona_rules import (  # noqa: PLC0415
+        _GUESS_RULE,
         _LENGTH_RULE,
         _MEDIA_RULE,
+        _SEARCH_RULE,
         _SECURITY_RULE,
     )
 
@@ -216,7 +204,8 @@ def main() -> int:
     parts = [
         body,
         FRAMING.strip(),
-        SEARCH_RULE.strip(),
+        _SEARCH_RULE.strip(),
+        _GUESS_RULE.strip(),
         NOTES_RULE.strip(),
         MEDIA_BRIDGE.strip(),
         ATTRIBUTION.strip(),
@@ -233,7 +222,7 @@ def main() -> int:
     print(f"寫入 {DEST}（{len(out)} 字元）")
     for label, text in zip(
         (
-            "人設本體", "framing", "查證", "記憶", "媒體橋接",
+            "人設本體", "framing", "查證", "估與推", "記憶", "媒體橋接",
             "標註格式", "長度", "媒體", "安全界線", "後台",
         ),
         parts,
