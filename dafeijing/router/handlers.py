@@ -29,6 +29,7 @@ from .telegram import group_usable, is_addressed_to_bot
 from .ui import reply_markdown, reply_plain, send_sticker, typing
 from ..core.chain import normalise_name
 from ..core.session import scope_for
+from ..core.util import local_stamp
 from .conversation import attribute, dm_conversation, group_conversation
 from .guards import is_bot_sender
 from .hermes import HermesError
@@ -98,7 +99,12 @@ async def _body_for(
 
     pieces = [quoted, raw, *(extras or [])]
     shown = "\n\n".join(piece for piece in pieces if piece)
-    body = attribute(user.full_name, user.id, shown)
+    body = attribute(
+        user.full_name,
+        user.id,
+        shown,
+        when=local_stamp(getattr(message, "date", None), svc.cfg.timezone_offset_hours),
+    )
 
     if with_stickers:
         sticker_menu = menu_block(svc.stickers.menu())
@@ -206,6 +212,9 @@ async def _quoted_block(svc, message) -> str | None:
                 entry.get("display_name"),
                 entry.get("user_id") or "?",
                 text,
+                when=local_stamp(
+                    entry.get("created_at"), svc.cfg.timezone_offset_hours
+                ),
             )
         )
 
@@ -217,7 +226,12 @@ async def _quoted_block(svc, message) -> str | None:
     if not text:
         return None
     name = getattr(sender, "full_name", None) if sender is not None else None
-    return attribute(name, getattr(sender, "id", None) or "?", text)
+    return attribute(
+        name,
+        getattr(sender, "id", None) or "?",
+        text,
+        when=local_stamp(getattr(parent, "date", None), svc.cfg.timezone_offset_hours),
+    )
 
 
 async def _collect_all_images(bot, message, svc) -> list[str]:

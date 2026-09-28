@@ -97,3 +97,27 @@ def test_attribute_trims_surrounding_whitespace():
 
 def test_attribute_handles_empty_text():
     assert attribute("甲", 1, "") == "[甲|1]\n"
+
+
+# ── 時間戳（2026-09-28 加）──────────────────────────────
+#
+# Hermes 只注入「對話開始日期」，每則訊息幾點送到佢係唔知嘅。
+# 冇時間戳嘅話，一條跨日嘅串佢分唔到「尋日講」同「頭先講」。
+
+
+def test_attribute_appends_timestamp_after_the_bracket():
+    assert attribute("陳大文", 216587605, "今日隻船係咪要改期？", when="09-27 20:24") == (
+        "[陳大文|216587605] 09-27 20:24\n今日隻船係咪要改期？"
+    )
+
+
+def test_attribute_without_timestamp_is_unchanged():
+    """`when=None` 一定要同以前一模一樣 —— 舊紀錄同舊測試都靠佢。"""
+    assert attribute("甲", 1, "hi") == attribute("甲", 1, "hi", when=None) == "[甲|1]\nhi"
+
+
+def test_timestamp_does_not_break_the_envelope():
+    """時間戳係標註嘅一部分，唔可以令個 `[名|id]` 提早收口。"""
+    marked = attribute("小明] 講嘅", 123, "真話", when="09-27 20:24")
+    assert marked == "[小明) 講嘅|123] 09-27 20:24\n真話"
+    assert marked.count("\n") == 1

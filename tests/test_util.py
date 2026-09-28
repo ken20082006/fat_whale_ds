@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-from dafeijing.core.util import today_text
+from dafeijing.core.util import local_stamp, today_text
 
 
 def test_today_text_shape():
@@ -52,3 +52,43 @@ def test_weekday_is_correct():
 
     weekdays = "一二三四五六日"
     assert weekdays[moment.weekday()] == "三"
+
+
+# ── local_stamp：發言者標註嘅時間戳 ──────────────────────────────
+
+
+def test_local_stamp_from_db_string():
+    """`group_cache.created_at` 係無 tz 嘅 UTC 字串。
+
+    實測值：2026-09-27 15:45:01 UTC 就係 router DB 嘅 mtime 23:45 HKT。
+    """
+    assert local_stamp("2026-09-27 15:45:01", 8) == "09-27 23:45"
+
+
+def test_local_stamp_from_aware_datetime():
+    """Telegram 嘅 `message.date` 係 tz-aware UTC。"""
+    dt = datetime(2026, 9, 27, 15, 45, 1, tzinfo=timezone.utc)
+    assert local_stamp(dt, 8) == "09-27 23:45"
+
+
+def test_local_stamp_from_naive_datetime_assumes_utc():
+    dt = datetime(2026, 9, 27, 15, 45, 1)
+    assert local_stamp(dt, 8) == "09-27 23:45"
+
+
+def test_local_stamp_crosses_midnight():
+    """UTC 16:00 → HKT 00:00 第二日。錯咗就會標錯日。"""
+    assert local_stamp("2026-09-27 16:00:00", 8) == "09-28 00:00"
+
+
+def test_local_stamp_respects_offset():
+    assert local_stamp("2026-09-27 15:45:01", 0) == "09-27 15:45"
+    assert local_stamp("2026-09-27 15:45:01", -5) == "09-27 10:45"
+
+
+def test_local_stamp_returns_none_when_unknown():
+    """寧願唔標時間，好過標個錯嘅 —— callers 當 falsy 處理。"""
+    assert local_stamp(None, 8) is None
+    assert local_stamp("", 8) is None
+    assert local_stamp("唔係時間", 8) is None
+    assert local_stamp("2026-09-27", 8) is None  # 冇時刻，格式唔啱

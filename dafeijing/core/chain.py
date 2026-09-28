@@ -165,10 +165,13 @@ class ReplyChain:
                 break
             seen.add(current)
 
+            # ⚠️ `created_at` 一定要 select —— Router 用佢做發言者標註嘅時間戳
+            # （`router/conversation.py:attribute()`）。冇佢嘅話引用串每一則都
+            # 冇時間，跨日對話就分唔到先後。
             row = await self._db.fetchone(
                 "SELECT message_id, reply_to_id, user_id, display_name, text, has_media, "
                 "media_file_id, media_source, clip_file_id, clip_seconds, clip_bytes, "
-                "unique_id "
+                "unique_id, created_at "
                 "FROM group_cache WHERE chat_id = ? AND message_id = ?",
                 (chat_id, current),
             )

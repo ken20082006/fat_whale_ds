@@ -39,6 +39,30 @@ def iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def local_stamp(ts: datetime | str | None, offset_hours: int) -> str | None:
+    """UTC 時間 → 放入發言者標註嘅本地時間戳（`MM-DD HH:MM`）。
+
+    兩種輸入，兩者都當 **UTC**：
+
+    - Telegram 嘅 `message.date`（tz-aware datetime）
+    - `group_cache.created_at`（`"YYYY-MM-DD HH:MM:SS"` 無 tz 字串）
+
+    **解唔到就回 None** —— 寧願唔標時間，好過標個錯嘅。冇年份係刻意：
+    對話極少跨年，而模型已經有 Hermes 注入嘅日期。
+    """
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        try:
+            ts = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    local = ts.astimezone(timezone(timedelta(hours=offset_hours)))
+    return local.strftime("%m-%d %H:%M")
+
+
 def in_seconds(seconds: int) -> str:
     return iso(now() + timedelta(seconds=seconds))
 

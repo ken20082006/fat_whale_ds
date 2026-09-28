@@ -29,20 +29,31 @@ def sanitise_name(name: str | None, user_id: int | str) -> str:
     return cleaned or str(user_id)
 
 
-def attribute(name: str | None, user_id: int | str, text: str) -> str:
-    """將一句話標上發言者。
+def attribute(
+    name: str | None, user_id: int | str, text: str, when: str | None = None
+) -> str:
+    """將一句話標上發言者，可選帶埋時間。
 
     格式沿用 Hermes 自己觀察群組訊息嗰套（`adapter.py` 嘅
-    `_telegram_group_observe_attributed_text`）：
+    `_telegram_group_observe_attributed_text`），時間擺括號後面：
 
-        [陳大文|216587605]
+        [陳大文|216587605] 09-27 20:24
         今日隻船係咪要改期？
 
     **為什麼一定要標**：一條引用串幾個人講嘢，唔標註嘅話 Hermes 收到
     一串 user 訊息，會當全部係同一個人講 —— 咁「記得我唔食辣」就會
     記落最後嗰個人頭上。
+
+    **為什麼要時間**（2026-09-28 加）：Hermes 只注入「對話開始日期」，
+    每則訊息幾點送到佢係唔知嘅。一條串跨日嗰陣，佢分唔到「頭先講」
+    同「尋日講」，亦答唔到「今日」「而家」類問題。
+
+    `when` 係**已經砌好嘅本地時間字串**（`MM-DD HH:MM`）—— 呢個檔刻意
+    保持純函式（冇 I/O、冇時區換算），Caller 用 `core.util.local_stamp()`。
+    冇 `when`（或者係 `None`）就照舊只出 `[名|id]`，格式同以前一樣。
     """
-    return f"[{sanitise_name(name, user_id)}|{user_id}]\n{(text or '').strip()}"
+    stamp = f" {when}" if when else ""
+    return f"[{sanitise_name(name, user_id)}|{user_id}]{stamp}\n{(text or '').strip()}"
 
 
 def group_conversation(chat_id: int | str, root_message_id: int) -> str:

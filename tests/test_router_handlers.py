@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from telegram.constants import ChatType
@@ -178,6 +179,8 @@ def _services(chain, hermes):
     return SimpleNamespace(
         cfg=SimpleNamespace(
             maintenance_mode=False,
+            # 發言者標註嘅時間戳要用（conversation.attribute ← util.local_stamp）。
+            timezone_offset_hours=8,
             admin_ids=(USER_ID,),
             model="test/model",
             hermes_input_price=0.30,
@@ -364,6 +367,56 @@ def test_media_only_message_still_has_text():
     )
 
     assert hermes.calls[0][1].endswith(f"[陳大文|{USER_ID}]\n〔圖片〕")
+
+
+def test_trigger_message_carries_a_local_timestamp():
+    """`message.date` 係 UTC，送去 Hermes 之前要轉做本地時間。
+
+    2026-09-27 12:24 UTC = 20:24 HKT。
+    """
+    hermes = FakeHermes()
+    message = _message(text="咁你覺得點", message_id=950)
+    message.date = datetime(2026, 9, 27, 12, 24, tzinfo=timezone.utc)
+
+    _run_group(message, _services(FakeChain(), hermes))
+
+    assert hermes.calls[0][1].endswith(
+        f"[陳大文|{USER_ID}] 09-27 20:24\n咁你覺得點"
+    )
+
+
+def test_quoted_chain_messages_carry_their_own_timestamps():
+    """引用串每一則都要有自己嘅時間 —— 跨日嗰陣先分得到先後。
+
+    時間嚟自 `group_cache.created_at`（UTC 字串），唔係 `message.date`。
+    """
+    chain = FakeChain(
+        chain=[
+            {
+                "message_id": 700,
+                "user_id": 111,
+                "display_name": "甲",
+                "text": "尋日講嘅嘢",
+                "created_at": "2026-09-26 02:00:00",  # → 09-26 10:00 HKT
+            },
+            {
+                "message_id": 701,
+                "user_id": 222,
+                "display_name": "乙",
+                "text": "今朝覆你",
+                "created_at": "2026-09-27 02:30:00",  # → 09-27 10:30 HKT
+            },
+        ]
+    )
+    hermes = FakeHermes()
+    _run_group(
+        _message(text="咁點", message_id=950, reply_to=_reply_stub(701, 222, "乙")),
+        _services(chain, hermes),
+    )
+
+    body = hermes.calls[0][1]
+    assert "[甲|111] 09-26 10:00" in body
+    assert "[乙|222] 09-27 10:30" in body
 
 
 # ── 私聊 ────────────────────────────────────────────────

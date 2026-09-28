@@ -184,6 +184,8 @@ def _services(sessions, hermes, memory=None):
     return SimpleNamespace(
         cfg=SimpleNamespace(
             maintenance_mode=False,
+            # 發言者標註嘅時間戳要用（conversation.attribute ← util.local_stamp）。
+            timezone_offset_hours=8,
             admin_ids=(USER_ID,),
             model="test/model",
             hermes_input_price=0.30,
@@ -446,6 +448,8 @@ def _rich_services(sessions, hermes, chain=None):
     return SimpleNamespace(
         cfg=SimpleNamespace(
             maintenance_mode=False,
+            # 發言者標註嘅時間戳要用（conversation.attribute ← util.local_stamp）。
+            timezone_offset_hours=8,
             admin_ids=(USER_ID,),
             model="test/model",
             hermes_input_price=0.30,
