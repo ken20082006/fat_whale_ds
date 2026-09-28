@@ -60,6 +60,7 @@ async def _body_for(
     is_group: bool,
     extras: list[str] | None = None,
     quoted: str | None = None,
+    history: str | None = None,
     with_stickers: bool = False,
 ) -> tuple[str, str, str]:
     """回傳 (送去 Hermes 嘅文字, scope, 訊息原文)。
@@ -73,6 +74,10 @@ async def _body_for(
     `extras` 係附喺訊息後面嘅媒體標註（真 GIF 嘅描述、影片嘅檔案路徑）。
     `quoted` 係被引用嗰則嘅內容（見 `_quoted_block`），排喺最前面 ——
     冇佢嘅話，對方引用一句嘢再 @ 本鯨，本鯨完全唔知引用緊乜。
+
+    `history` 係「聊天室模式」嘅群組近況（見 `_room_history_block`），
+    排喺 `quoted` **之前** —— 因為近況係「更早發生嘅事」，次序要跟時間。
+    唔傳（預設 `None`）就同以前完全一樣。
 
     **回傳嘅第三個值係原文** —— 抽筆記一定要用原文，唔可以連引用同媒體
     標註一齊抽。大肥鯨嘅血淚規則：`media_note` 唔可以落庫，落咗下一輪
@@ -97,7 +102,7 @@ async def _body_for(
         if others:
             blocks.append(others_block(others))
 
-    pieces = [quoted, raw, *(extras or [])]
+    pieces = [history, quoted, raw, *(extras or [])]
     shown = "\n\n".join(piece for piece in pieces if piece)
     body = attribute(
         user.full_name,
@@ -171,8 +176,8 @@ async def _others_notes(
     return out
 
 
-async def _quoted_block(svc, message) -> str | None:
-    """新開對話嗰陣，附上**成條引用串**（由舊到新）。冇引用就回 None。
+async def _quoted_entries(svc, message) -> list[dict] | None:
+    """新開對話嗰陣，附上**成條引用串**（由舊到新）嘅原始條目。冇引用就回 None。
 
     **要成條，唔係淨係最尾嗰則。** 引用鏈係一層一層疊上去嘅：
 
@@ -184,6 +189,9 @@ async def _quoted_block(svc, message) -> str | None:
 
     **引用本鯨就唔使附** —— 嗰個係「續同一條對話」，Hermes 歷史已經有
     成條串（每則觸發訊息都送過），再送只會令佢見到自己講過嘅嘢重複。
+
+    ⚠️ 呢個函式**唔渲染**，只回條目 —— 聊天室模式要先用窗口嘅 message_id
+    同條串去重，之後先渲染（見 `_render_entries()`）。
     """
     parent = message.reply_to_message
     if parent is None:
@@ -195,16 +203,48 @@ async def _quoted_block(svc, message) -> str | None:
 
     # 由觸發嗰則往上追到串根，再排返由舊到新。
     chain = await svc.chain.resolve(message.chat_id, message.message_id)
-    blocks: list[str] = []
+    entries: list[dict] = []
     for entry in chain:
         # 最後一則就係觸發嗰句自己 —— 佢會另外送，唔好重複。
         if entry.get("message_id") == message.message_id:
             continue
+        if not (entry.get("text") or "").strip():
+            continue  # 純媒體嘅一則，文字冇嘢好附（圖另外送）
+        entries.append(dict(entry))
+
+    if entries:
+        return entries
+
+    # 快取追唔到（例如重啟之後第一次見到）：至少附返最尾嗰則。
+    # `created_at` 擺 `parent.date`（datetime）—— `local_stamp()` 兩種都收。
+    text = (parent.text or parent.caption or "").strip()
+    if not text:
+        return None
+    return [
+        {
+            "message_id": parent.message_id,
+            "reply_to_id": None,
+            "user_id": getattr(sender, "id", None) or "?",
+            "display_name": getattr(sender, "full_name", None) if sender else None,
+            "text": text,
+            "has_media": False,
+            "created_at": getattr(parent, "date", None),
+        }
+    ]
+
+
+def _render_entries(svc, entries: list[dict] | None) -> str | None:
+    """條目 → 送去 Hermes 嘅文字。
+
+    `message_id == -1` 係 `resolve()`／`window()` 摺疊時插嘅標記，唔係真訊息，
+    冇發言者 —— 直接出文字，唔標。
+    """
+    blocks: list[str] = []
+    for entry in entries or []:
         text = (entry.get("text") or "").strip()
         if not text:
-            continue  # 純媒體嘅一則，文字冇嘢好附（圖另外送）
+            continue
         if entry.get("message_id") == -1:
-            # `resolve()` 摺疊中段時插嘅標記，唔係真訊息，冇發言者。
             blocks.append(text)
             continue
         blocks.append(
@@ -217,21 +257,12 @@ async def _quoted_block(svc, message) -> str | None:
                 ),
             )
         )
+    return "\n\n".join(blocks) if blocks else None
 
-    if blocks:
-        return "\n\n".join(blocks)
 
-    # 快取追唔到（例如重啟之後第一次見到）：至少附返最尾嗰則。
-    text = (parent.text or parent.caption or "").strip()
-    if not text:
-        return None
-    name = getattr(sender, "full_name", None) if sender is not None else None
-    return attribute(
-        name,
-        getattr(sender, "id", None) or "?",
-        text,
-        when=local_stamp(getattr(parent, "date", None), svc.cfg.timezone_offset_hours),
-    )
+async def _quoted_block(svc, message) -> str | None:
+    """`_quoted_entries()` + `_render_entries()` 嘅一步版。"""
+    return _render_entries(svc, await _quoted_entries(svc, message))
 
 
 async def _collect_all_images(bot, message, svc) -> list[str]:

@@ -10,6 +10,9 @@ from __future__ import annotations
 # 對話名的前綴。用嚟分辨同一個 Hermes profile 入面唔同來源嘅對話。
 GROUP_PREFIX = "grp"
 DM_PREFIX = "dm"
+# 「聊天室模式」：成個群一條對話。用獨立 prefix 而唔係 `grp:<chat>:all`
+# 係為咗同 `grp:<chat>:<message_id>` 永遠冇得撞，log 同 DB 一眼分得出。
+ROOM_PREFIX = "room"
 
 # 顯示名可能會撞到呢兩個字元，佢哋係標註格式嘅分隔符。
 # 名有 `]` 嘅話 `[名|id]` 會提早收口，後面全部變成「訊息內容」；
@@ -63,6 +66,15 @@ def group_conversation(chat_id: int | str, root_message_id: int) -> str:
     冇引用任何訊息嘅話，串根就係訊息自己，即係開新對話。
     """
     return f"{GROUP_PREFIX}:{chat_id}:{root_message_id}"
+
+
+def room_conversation(chat_id: int | str) -> str:
+    """聊天室模式嘅對話名 —— **成個群一條**，唔分引用串。
+
+    開關 A 開咗就用呢個，取代 `group_conversation()`。咁樣 Hermes 嗰邊
+    就由「每條引用串一段歷史」變成「一個群一段歷史」。
+    """
+    return f"{ROOM_PREFIX}:{chat_id}"
 
 
 def dm_conversation(

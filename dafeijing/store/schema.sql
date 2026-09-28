@@ -193,3 +193,35 @@ CREATE TABLE IF NOT EXISTS group_profile (
     content       TEXT    NOT NULL,
     summarized_at TEXT    NOT NULL
 );
+
+-- 群組「聊天室模式」—— 兩個**獨立**開關，逐個群設定。
+--
+--   room_enabled    開關 A：成個群共用一條 Hermes 對話（`room:<chat_id>`）。
+--                   關咗就係原本「每條引用串一條」（`grp:<chat>:<msg>`）。
+--   read_background 開關 B：每次被 @ 嗰陣，附上「最近群組對話」做背景。
+--                   關咗就淨係見觸發嗰句同引用串（原本行為）。
+--
+-- 兩個可以自由配搭。由 `/room` 指令改（管理員限定），唔喺 .env。
+--
+-- ⚠️ **一定要用 upsert**（`INSERT … ON CONFLICT DO UPDATE`）。唔可以學
+-- `AccessControl.set_group_allowed()` 嗰種「先確認列存在」——`groups` 表喺
+-- production 根本冇人寫入（`register_group()` 冇 caller），靠佢會靜默失敗。
+CREATE TABLE IF NOT EXISTS group_room (
+    chat_id         INTEGER PRIMARY KEY,
+    room_enabled    INTEGER NOT NULL DEFAULT 0,
+    read_background INTEGER NOT NULL DEFAULT 0,
+    updated_at      TEXT    NOT NULL
+);
+
+-- 送過去 Hermes 嘅進度位標。**以 conversation 為 key，唔係 chat_id。**
+--
+-- 咁開關 A 開（`room:<chat>` 一條對話，一個 cursor）同關（每條引用串各自
+-- 一個 cursor）都行得通，唔使為兩種模式寫兩套邏輯。
+--
+-- 為什麼要存 DB 唔存記憶體：存記憶體嘅話每次重啟 Router 都會重送最近 30 條，
+-- 而嗰 30 條 Hermes 已經有 —— 即係又製造重複，正正係呢個 cursor 想避免嘅嘢。
+CREATE TABLE IF NOT EXISTS room_cursor (
+    conversation      TEXT PRIMARY KEY,
+    cursor_message_id INTEGER,
+    updated_at        TEXT NOT NULL
+);

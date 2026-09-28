@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 _MEDIA_PLACEHOLDER = "（非文字訊息）"
 _ELISION = "……（中間省略 {n} 則）"
+# 近況窗口爆上限用。同 `_ELISION` 分開寫係故意 —— 一個係「中間冇咗」，
+# 一個係「喺呢句之前仲有」，模型要分得清。
+_WINDOW_ELISION = "……（呢句之前仲有 {n} 則冇喺度）"
 
 
 class ReplyChain:
@@ -199,9 +202,90 @@ class ReplyChain:
             return None
         return row["conversation"] or None
 
-    def _trim(self, chain: list[dict]) -> list[dict]:
-        """超出 token 預算時保留頭尾、摺疊中段。"""
-        budget = self._cfg.group_chain_max_tokens
+    async def window(
+        self,
+        chat_id: int,
+        *,
+        before_message_id: int,
+        after_message_id: int | None = None,
+        limit: int,
+        exclude_user_id: int | None = None,
+        budget: int | None = None,
+    ) -> list[dict]:
+        """群組近況 —— 「聊天室模式」用嘅上下文窗口。
+
+        拎 `before_message_id`（觸發嗰則，**唔包佢**）之前、
+        `after_message_id`（cursor，即上次送過嘅位標）之後嘅最近 `limit` 則，
+        **由舊到新**排。
+
+        `after_message_id=None` 代表「從來冇送過」—— 咁就淨係取最近 `limit` 則，
+        即係補一個種。
+
+        爆 `limit` 就只保留最新嗰批，最前面插一則 `message_id = -1` 嘅標記講明
+        之前仲有幾多則冇喺度。**呢個係刻意嘅**：用戶唔要純 delta（怕隔太耐
+        中間積落好多訊息，delta 會無限大），但要一個上限。
+
+        `exclude_user_id` 傳 `svc.bot_id` 隔走本鯨自己嘅訊息 —— 佢自己講過嘅嘢
+        喺 Hermes 對話歷史入面已經係 assistant turn，再當 user 訊息送一次
+        會同一句出現兩次。而且 SOUL.md 寫死「你自己講嘅嘢唔會有標註」。
+
+        ⚠️ 排序用 `message_id` 而唔係 `created_at`：Telegram 嘅 message_id
+        喺同一個 chat 內單調遞增（包括本鯨自己發嘅），而 `created_at` 冇 index
+        配合排序會慢。`conversation_of()` 一路都係默默用緊呢個前提。
+        """
+        # 呢段兩個 query 共用（攞資料同 COUNT），所以抽做常數。
+        # 全部係 `?` 參數，冇字串插值。
+        scope_sql = (
+            "FROM group_cache WHERE chat_id = ? AND message_id < ? "
+            "AND (? IS NULL OR message_id > ?) "
+            "AND (? IS NULL OR user_id IS NULL OR user_id != ?)"
+        )
+        params = (
+            chat_id,
+            before_message_id,
+            after_message_id,
+            after_message_id,
+            exclude_user_id,
+            exclude_user_id,
+        )
+
+        # 攞多一則淨係為咗知有冇爆上限，唔使每次都做 COUNT。
+        rows = await self._db.fetchall(
+            "SELECT message_id, reply_to_id, user_id, display_name, text, has_media, "
+            f"created_at {scope_sql} ORDER BY message_id DESC LIMIT ?",
+            (*params, limit + 1),
+        )
+
+        overflow = len(rows) > limit
+        entries = [dict(row) for row in reversed(rows[:limit])]
+
+        if overflow:
+            total = await self._db.fetchval(
+                f"SELECT COUNT(*) {scope_sql}", params, default=0
+            )
+            omitted = max(0, int(total) - limit)
+            entries.insert(
+                0,
+                {
+                    "message_id": -1,
+                    "display_name": None,
+                    "user_id": None,
+                    "text": _WINDOW_ELISION.format(n=omitted),
+                    "has_media": False,
+                    "reply_to_id": None,
+                    "created_at": None,
+                },
+            )
+
+        return self._trim(entries, budget)
+
+    def _trim(self, chain: list[dict], budget: int | None = None) -> list[dict]:
+        """超出 token 預算時保留頭尾、摺疊中段。
+
+        `budget` 唔傳就用 `cfg.group_chain_max_tokens`（引用串嗰個）。
+        聊天室模式嘅近況窗口有自己嘅預算，所以容許蓋過。
+        """
+        budget = budget or self._cfg.group_chain_max_tokens
         if not chain:
             return chain
 
