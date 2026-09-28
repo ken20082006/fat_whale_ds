@@ -13,7 +13,13 @@ from types import SimpleNamespace
 from telegram.constants import ChatType
 from telegram.ext import Application, CommandHandler
 
-from dafeijing.router.commands import cmd_context, cmd_help, cmd_new, register
+from dafeijing.router.commands import (
+    cmd_context,
+    cmd_help,
+    cmd_new,
+    cmd_room,
+    register,
+)
 from dafeijing.router.conversation import dm_conversation
 
 CHAT = -1001324180809
@@ -129,6 +135,113 @@ def test_help_does_not_mention_commands_that_do_not_exist():
     text = _help_text(is_admin=True)
     for dead in ("/tune", "/vibe", "/think", "/undo"):
         assert dead not in text
+
+
+# ── /room（管理員限定）────────────────────────────────────
+#
+# 呢兩個開關改嘅係**全群行為** —— 開咗之後成個群嘅對話方式都變，
+# 所以一定要管理員先改得。呢度用真嘅 `@admin_only` 裝飾器（唔係自己
+# 判斷），所以測到嘅係真正嗰道閘。
+
+
+class _FakeRooms:
+    def __init__(self) -> None:
+        self.room_enabled = False
+        self.read_background = False
+        self.cursor_value: int | None = None
+        self.reset_calls = 0
+
+    async def status(self, _chat_id):
+        return self.room_enabled, self.read_background
+
+    async def cursor(self, _conversation):
+        return self.cursor_value
+
+    async def set_room_enabled(self, _chat_id, on):
+        self.room_enabled = on
+
+    async def set_read_background(self, _chat_id, on):
+        self.read_background = on
+
+    async def set_cursor(self, _conversation, message_id):
+        self.cursor_value = message_id
+
+    async def reset_cursor(self, _conversation):
+        self.reset_calls += 1
+        self.cursor_value = None
+
+
+def _run_room(args, *, is_admin: bool, chat_type=ChatType.SUPERGROUP):
+    rooms = _FakeRooms()
+    sent: list[str] = []
+
+    async def reply_text(text, **_kw):
+        sent.append(text)
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=USER_ID),
+        effective_chat=SimpleNamespace(id=CHAT, type=chat_type),
+        effective_message=SimpleNamespace(reply_text=reply_text),
+    )
+    cfg = _fake_cfg()
+    cfg.group_room_window_messages = 30
+    svc = SimpleNamespace(is_admin=lambda _uid: is_admin, cfg=cfg, rooms=rooms)
+    asyncio.run(
+        cmd_room(update, SimpleNamespace(bot_data={"services": svc}, args=args))
+    )
+    return rooms, sent
+
+
+def test_non_admin_cannot_turn_room_on():
+    rooms, sent = _run_room(["on"], is_admin=False)
+    assert rooms.room_enabled is False, "非管理員改到全群行為 = 大件事"
+    assert "只有管理員" in sent[0]
+
+
+def test_non_admin_cannot_turn_read_background_on():
+    rooms, _ = _run_room(["read", "on"], is_admin=False)
+    assert rooms.read_background is False
+
+
+def test_non_admin_cannot_reset_the_cursor():
+    rooms, _ = _run_room(["reset"], is_admin=False)
+    assert rooms.reset_calls == 0
+
+
+def test_non_admin_cannot_even_see_the_status():
+    rooms, sent = _run_room([], is_admin=False)
+    assert "只有管理員" in sent[0]
+
+
+def test_admin_can_turn_room_on_and_off():
+    rooms, _ = _run_room(["on"], is_admin=True)
+    assert rooms.room_enabled is True
+    rooms, _ = _run_room(["off"], is_admin=True)
+    assert rooms.room_enabled is False
+
+
+def test_admin_can_turn_read_background_on():
+    rooms, _ = _run_room(["read", "on"], is_admin=True)
+    assert rooms.read_background is True
+
+
+def test_admin_can_reset_the_cursor():
+    rooms, _ = _run_room(["reset"], is_admin=True)
+    assert rooms.reset_calls == 1
+
+
+def test_room_does_not_leak_the_other_switch_into_the_status():
+    """兩個開關獨立 —— `/room on` 之後 B 應該仍然係關。"""
+    rooms, _ = _run_room(["on"], is_admin=True)
+    assert (rooms.room_enabled, rooms.read_background) == (True, False)
+    rooms, _ = _run_room(["read", "on"], is_admin=True)
+    assert (rooms.room_enabled, rooms.read_background) == (False, True)
+
+
+def test_room_refuses_in_a_private_chat():
+    """呢個係群組功能 —— 私聊打要講清楚，唔好靜靜哋改咗個 0 號 chat。"""
+    rooms, sent = _run_room(["on"], is_admin=True, chat_type=ChatType.PRIVATE)
+    assert "群組功能" in sent[0]
 
 
 # ── /context ────────────────────────────────────────────
