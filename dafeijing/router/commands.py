@@ -24,6 +24,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 from ..core.access import RedeemStatus
 from ..core.session import PRIVATE_SCOPE, scope_for
+from .conversation import room_conversation
 from .services import RouterServices
 from .telegram import get_services
 from .ui import reply_markdown, reply_plain, typing
@@ -298,6 +299,95 @@ async def cmd_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 @admin_only
+async def cmd_room(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """群組「聊天室模式」—— **喺目標群組入面打**。
+
+        /room                睇現況
+        /room on | off       開關 A：成個群共用一條對話
+        /room read on | off  開關 B：每次 @ 附上最近嘅群組對話
+        /room reset          清 cursor（下次 @ 補最近 N 條）
+
+    兩個開關**獨立**，冇交叉依賴：
+      A 管對話名（`room:<chat_id>` vs 每條引用串一條）
+      B 管要唔要附「群組近況」做背景
+
+    ⚠️ 唔收 chat_id 參數（同 `/allowgroup` 唔同）—— 因為 `/room read on`
+    同 `/room <chat_id>` 撞埋一齊分唔清。要改邊個群就入去嗰個群打。
+    """
+    svc = get_services(context)
+    chat = update.effective_chat
+    if chat is None or chat.type == ChatType.PRIVATE:
+        await update.effective_message.reply_text(
+            "呢個係群組功能 —— 入目標群組打 /room。"
+        )
+        return
+
+    chat_id = chat.id
+    conversation = room_conversation(chat_id)
+    args = [a.lower() for a in (context.args or [])]
+
+    async def show() -> None:
+        room_on, read_on = await svc.rooms.status(chat_id)
+        cursor = await svc.rooms.cursor(conversation)
+        window = svc.cfg.group_room_window_messages
+        await update.effective_message.reply_text(
+            "聊天室模式現況：\n"
+            f"· 一個群一條對話 —— {'開' if room_on else '關'}\n"
+            f"· 讀最近群組對話 —— {'開' if read_on else '關'}\n"
+            f"· 對話名：{conversation}\n"
+            f"· 進度位標：{cursor if cursor else f'未有（下次補最近 {window} 條）'}\n\n"
+            "用法：/room on|off｜/room read on|off｜/room reset"
+        )
+
+    if not args:
+        await show()
+        return
+
+    if args[0] == "reset":
+        await svc.rooms.reset_cursor(conversation)
+        await update.effective_message.reply_text(
+            f"進度位標清咗 —— 下次 @ {svc.cfg.self_name}會補返最近 "
+            f"{svc.cfg.group_room_window_messages} 條。\n"
+            "（Hermes 嗰邊嘅歷史冇清 —— 呢個唔係開新對話。）"
+        )
+        return
+
+    # `/room read on|off` —— 開關 B
+    if args[0] == "read":
+        if len(args) < 2 or args[1] not in ("on", "off"):
+            await update.effective_message.reply_text("用法：/room read on|off")
+            return
+        want = args[1] == "on"
+        await svc.rooms.set_read_background(chat_id, want)
+        await update.effective_message.reply_text(
+            f"讀最近群組對話：{'開' if want else '關'}。\n"
+            + (
+                f"下次 @ {svc.cfg.self_name}會附上最近嘅群組對話做背景。"
+                if want
+                else f"{svc.cfg.self_name}淨係會見到你嗰句同引用串。"
+            )
+        )
+        return
+
+    # `/room on|off` —— 開關 A
+    if args[0] not in ("on", "off"):
+        await update.effective_message.reply_text(
+            "用法：/room on|off｜/room read on|off｜/room reset｜/room（睇現況）"
+        )
+        return
+    want = args[0] == "on"
+    await svc.rooms.set_room_enabled(chat_id, want)
+    await update.effective_message.reply_text(
+        f"一個群一條對話：{'開' if want else '關'}。\n"
+        + (
+            f"成個群由而家起共用一條對話（{conversation}）—— 引用邊個都係同一條。"
+            if want
+            else "回復原本：每條引用串一條對話。"
+        )
+    )
+
+
+@admin_only
 async def cmd_block(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     svc = get_services(context)
     if not context.args or not context.args[0].isdigit():
@@ -395,7 +485,8 @@ _ADMIN_HELP = (
     "  /denygroup [chat_id] — 取消永久放行\n"
     "  /groups — 列出群組同授權狀態\n"
     "  /block <user_id> — 停用使用者\n"
-    "  /unblock <user_id> — 解除停用"
+    "  /unblock <user_id> — 解除停用\n"
+    "  /room — 群組聊天室模式（成個群一條對話、只 @ 先出聲）"
 )
 
 
@@ -534,6 +625,7 @@ def register(application: Application) -> None:
         ("unblock", cmd_unblock),
         ("cost", cmd_cost),
         ("stats", cmd_stats),
+        ("room", cmd_room),
     )
     for name, handler in (*user_commands, *admin_commands):
         application.add_handler(CommandHandler(name, handler))

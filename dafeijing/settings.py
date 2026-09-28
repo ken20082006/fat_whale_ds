@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     # 思考越深就多留一點；不說要思考時完全不動。
     reasoning_budget_low: float = 1.2
     reasoning_budget_high: float = 1.8
+    # ── 群組聊天室模式 ──────────────────────────────────
+    # 兩個開關本身係 **per-group、存 DB**（見 core/room.py），唔喺呢度。
+    # 呢兩條係窗口大細 —— 全局共用。
+    #
+    # 每次被 @ 送「cursor 之後嘅新訊息」，最多咁多則；爆就只留最新嗰批，
+    # 前面加一句標記講明漏咗幾多。從未送過（冇 cursor）就補最近咁多則。
+    # 實測：30 則大約等於一輪閒聊，足夠睇得出「講緊乜」。
+    group_room_window_messages: int = 30
+    # token 保險閘。窗口太長就交 `ReplyChain._trim()` 摺疊中段
+    # （同引用串共用嗰個機制）。
+    group_room_window_tokens: int = 6_000
+
     # 記憶抽取的前置閘：Jev 說「這段對話沒有值得記的事實」時，跳過那次抽取
     # 呼叫。門檻刻意設得低 —— 漏記一則正確的事實，比多花一次便宜呼叫嚴重
     # 得多，所以這個閘只可以在有把握時才收窄。

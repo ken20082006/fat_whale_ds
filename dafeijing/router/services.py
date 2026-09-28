@@ -21,6 +21,7 @@ from ..core.chain import ReplyChain
 from ..core.groupprofile import GroupProfiler
 from ..core.memory import MemoryExtractor
 from ..core.ratelimit import RateLimiter
+from ..core.room import RoomMode
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
@@ -49,6 +50,8 @@ class RouterServices:
     stickers: StickerLibrary
     usage: UsageLog
     runaway: RunawayGuard
+    # 群組「聊天室模式」嘅兩個開關同 cursor。見 core/room.py。
+    rooms: RoomMode
 
     bot_username: str = ""
     bot_id: int = 0
@@ -93,6 +96,7 @@ def create_services(cfg: Settings) -> RouterServices:
         stickers=StickerLibrary(cfg),
         # 記低每次 Hermes 呼叫嘅用量 —— Hermes 唔回 cost，所以要自己估。
         usage=UsageLog(db),
+        rooms=RoomMode(db),
         runaway=RunawayGuard(
             cfg.conversation_max_calls, cfg.conversation_window_seconds
         ),

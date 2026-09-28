@@ -32,6 +32,19 @@ async def _noop_record(**_kw) -> None:
     return None
 
 
+# 聊天室模式預設**全關** —— 令下面所有測試行返原本路徑。
+async def _rooms_off(_chat_id: int) -> tuple[bool, bool]:
+    return False, False
+
+
+async def _no_cursor(_conversation: str) -> int | None:
+    return None
+
+
+async def _noop_set_cursor(_conversation: str, _message_id: int) -> None:
+    return None
+
+
 class FakeChain:
     """`conversations` 模擬 group_cache 入面本鯨嗰幾則回覆嘅對話名。"""
 
@@ -196,6 +209,9 @@ def _services(chain, hermes):
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
         runaway=SimpleNamespace(allow=lambda _c: True),
+        rooms=SimpleNamespace(
+            status=_rooms_off, cursor=_no_cursor, set_cursor=_noop_set_cursor
+        ),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),

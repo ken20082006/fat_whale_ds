@@ -32,6 +32,19 @@ async def _noop_record(**_kw) -> None:
     return None
 
 
+# 聊天室模式預設**全關** —— 令下面所有測試行返原本路徑。
+async def _rooms_off(_chat_id: int) -> tuple[bool, bool]:
+    return False, False
+
+
+async def _no_cursor(_conversation: str) -> int | None:
+    return None
+
+
+async def _noop_set_cursor(_conversation: str, _message_id: int) -> None:
+    return None
+
+
 def test_notes_are_wrapped_in_markers():
     """用標記框住 —— 筆記內容來自對話，唔可以取得「指示」嘅地位。"""
     block = with_notes("你好", ["唔食辣", "住喺香港"])
@@ -198,6 +211,10 @@ def _services(sessions, hermes, memory=None):
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
         runaway=SimpleNamespace(allow=lambda _c: True),
+        # 聊天室模式預設全關 —— 下面所有測試行返原本路徑。
+        rooms=SimpleNamespace(
+            status=_rooms_off, cursor=_no_cursor, set_cursor=_noop_set_cursor
+        ),
         memory=memory or FakeMemory(),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),
@@ -462,6 +479,10 @@ def _rich_services(sessions, hermes, chain=None):
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
         runaway=SimpleNamespace(allow=lambda _c: True),
+        # 聊天室模式預設全關 —— 下面所有測試行返原本路徑。
+        rooms=SimpleNamespace(
+            status=_rooms_off, cursor=_no_cursor, set_cursor=_noop_set_cursor
+        ),
         memory=SimpleNamespace(schedule=lambda **_kw: None),
         stickers=SimpleNamespace(menu=lambda: "", resolve=lambda _i: None),
         seen_conversations=set(),

@@ -64,6 +64,7 @@ def test_expected_commands_are_registered():
         "unblock",
         "cost",
         "stats",
+        "room",
     }
 
 
