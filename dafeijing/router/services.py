@@ -7,9 +7,12 @@
 但**記憶同判斷留返喺 Router**：
 - `sessions` / `memory` —— per-user 筆記。Hermes 嗰份 `USER.md` 係 profile
   全域，冇 per-sender 概念，所以呢件事一定要自己做（見 router/memory.py）。
-- `llm` / `decisions` —— 只為咗背景抽取筆記而存在。呢個係 utility 工作，
+- `llm` —— 只為咗背景抽取筆記而存在。呢個係 utility 工作，
   唔係對話：用 Hermes 做要成 17k tokens 一次，用 OpenRouter 直打係千幾。
   對話本身仍然 100% 經 Hermes。
+
+  （2026-10-19：以前喺隔籬仲有個 `decisions` —— Jev 記憶閘。個端點由
+  2026-10-07 起地區封鎖 403，已刪。）
 """
 
 from __future__ import annotations
@@ -25,7 +28,6 @@ from ..core.room import RoomMode
 from ..core.session import SessionManager
 from ..core.stickers import StickerLibrary
 from ..core.usage import UsageLog
-from ..llm.decisions import DecisionsClient
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
@@ -44,7 +46,6 @@ class RouterServices:
     hermes: HermesClient
     sessions: SessionManager
     llm: OpenRouterClient
-    decisions: DecisionsClient
     memory: MemoryExtractor
     profiler: GroupProfiler
     stickers: StickerLibrary
@@ -75,7 +76,6 @@ def create_services(cfg: Settings) -> RouterServices:
     db = Database(cfg.db_path)
     sessions = SessionManager(db, cfg)
     llm = OpenRouterClient(cfg)
-    decisions = DecisionsClient(cfg)
 
     return RouterServices(
         cfg=cfg,
@@ -87,8 +87,7 @@ def create_services(cfg: Settings) -> RouterServices:
         hermes=HermesClient(cfg.hermes_url, cfg.hermes_key),
         sessions=sessions,
         llm=llm,
-        decisions=decisions,
-        memory=MemoryExtractor(cfg, sessions, llm, decisions),
+        memory=MemoryExtractor(cfg, sessions, llm),
         # 群組概況：每個群一則氣氛/慣例。同筆記一樣要自己排程更新，
         # 因為 Hermes 嗰邊冇呢個概念。
         profiler=GroupProfiler(cfg, sessions, llm),

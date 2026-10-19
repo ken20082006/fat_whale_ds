@@ -89,7 +89,7 @@ chain-a 記「藍色」 → 問 chain-a → 藍色 ✅
 | `router/ui.py` | 送出、typing（原 `bot/ui.py`，2026-09-26 搬入 `router/`）|
 | `store/` | SQLite（`group_cache`、`memory_notes`、`usage_log`…）|
 | `core/memory.py` | per-user 筆記抽取（見下）|
-| `llm/` | ⚠️ **冇掉走** —— 記憶抽取同 Jev 決策閘仍然經 OpenRouter 直打 |
+| `llm/` | ⚠️ **冇掉走** —— 記憶抽取仍然經 OpenRouter 直打（Jev 已刪，見下）|
 
 ### 交畀 Hermes
 
@@ -180,9 +180,29 @@ Hermes 嘅 `USER.md` / `MEMORY.md` 係 **profile 全域**
 群組十個人會撈埋一份，所以**唔用 Hermes 嗰套**。
 
 Router 保住大肥鯨嘅 `memory_notes`（`user_id` + `scope`），連帶保留：
-Jev 記憶閘（`memory.py:188`）、自動抽取、定期濃縮、scope 隔離。
+自動抽取、定期濃縮、scope 隔離。
 
 每次請求前，將**當前發言者**嘅筆記注入。
+
+**2026-10-19：Jev 記憶閘已刪。** 原本呢度前後有兩道閘：
+
+1. `_worth_extracting()` —— **免費**啟發式，擋「短過 12 字」同「純媒體標註」。
+2. Jev 判斷「呢段對話有冇值得記嘅事實」—— 收費，約 $0.00002/次。
+
+第 2 道喺 2026-10-07 起壞咗但冇人知：TypeSafe 個端點對本地區**永久 403**
+（`"not available in your region"`，`endpoint_count: 1` 即係冇 fallback），
+30 次呼叫 0 次成功。而 `decisions.py` 嘅設計係「失敗一律回 None」、
+`memory.py` 收到 None 就當「值得記」放行 —— **兩層善意加起來等於冇閘**，
+只係每則訊息白花一次 403 呼叫。
+
+刪咗之後記憶閘淨返第 1 道（免費）。**取捨講明**：免費嗰道擋唔到
+「長但冇內容」嘅閒聊（例如長篇鬧交、長篇轉貼），嗰種而家會多跑一次
+utility 抽取。要補返就要另寫一道閘 —— 但要先問值唔值：過去 14 日
+全系統只產生咗 2 則筆記，即係抽取本身好少跑。
+
+⚠️ 順帶：呢件事曝露咗一個通病 —— **「失敗就降級成放行」嘅閘，壞咗係靜默嘅**，
+log 只有 WARNING，而 WARNING 唔會有人睇。任何類似嘅閘都應該諗吓
+「佢壞咗我點知」。
 
 ### 4. 真 GIF：轉做 MP4，行返影片條路（2026-09-26 改）
 

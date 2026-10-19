@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 而且要在載入時就驗證，不要等到第一次搜尋才發現打錯字。
 #   off      完全不搜
 #   trigger  只認明講的（「上網查」「search 一下」）
-#   auto     交給判斷（見 llm/decisions.py）
+#   auto     交給判斷（判斷已經交畀 Hermes —— 呢個值喺 Router 側淨低標籤用途）
 #   always   每則都搜
 SEARCH_MODES = ("off", "trigger", "auto", "always")
 
@@ -61,36 +61,28 @@ class Settings(BaseSettings):
 
     # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。
     # 實測關掉後單次費用約降為四分之一，對一般閒聊毫無損失。
-    # 使用者可用 /think 個別開啟。
     #
-    # 這個值是**降級用的後備**：使用者沒指定 /think 時由決策模型逐則判斷，
-    # 決策模型不可用時才退回這裡。見 llm/decisions.py。
+    # 2026-10-19：以前仲寫住「使用者可用 /think 個別開啟，唔指定時由決策模型
+    # 逐則判斷」—— **兩邊都已經唔存在**。`/think` 冇搬過嚟（見 router/commands.py
+    # 檔頭），Jev 亦已刪。而家推理係恆常關掉，冇任何 runtime 開關。
+    # 想開就改呢個值再重啟（記住 Hermes 嗰邊亦要跟 —— 回答用 Hermes 個腦）。
     reasoning_enabled: bool = False
 
-    # ── 決策模型（Jev）──
-    # TypeSafe 的 Jev，走獨立端點，不是聊天模型。用來在呼叫主模型前判斷
-    # 這一則需不需要深度思考。$0.042/M 輸入、輸出免費，大約 $0.00002/次。
-    decision_enabled: bool = True
-    decision_model: str = "typesafe/jev-1.13"
-    decision_endpoint: str = "https://openrouter.ai/api/alpha/decisions"
-    # 它擋在主回覆前面，逾時要短 —— 等太久不如直接降級。
-    decision_timeout_seconds: float = 8.0
-    # 判斷附帶的信心值（0–1）。低於這個值就當作「沒判斷」，退回後備 ——
-    # 分布很平的時候（實測見過 0.23）不該硬選一個。
-    decision_min_confidence: float = 0.35
-    # 判斷要看幾多則上文。太少的話短追問會失真 ——「duo呢」單獨看只是三個
-    # 字的片段，判斷成「直接答」；帶上「上一句問緊型號」之後才會判斷成
-    # 「要搜尋」。實測 0 則 direct、2 則以上 search。
+    # ── 決策模型（Jev）已刪（2026-10-19）────────────────
+    # 曾經有三個用途，全部隨 Hermes 遷移而死剩一個記憶閘，而嗰個閘又壞咗：
+    # TypeSafe 個端點由 2026-10-07 起對我哋嘅地區回 403
+    # （"not available in your region"，endpoint_count: 1，冇 fallback），
+    # 30 次呼叫 0 次成功。因為用戶端失敗時一律回 None、而呼叫端收到 None
+    # 就當「值得記」放行，所以個閘實際上冇閘過任何嘢，只係每則訊息白花一次呼叫。
     #
-    # 但 2 則並不總是夠（真實事故裡 2 則仍然誤判），所以這裡留一點餘裕。
-    # 15 則 = 大約七個來回。判斷要睇得出「對方已經問過、我查過、佢仍然
-    # 追問」這個模式，太少則數看不出來，太多則每則訊息都多付一次輸入。
-    decision_context_messages: int = 15
-    # 判斷說要思考時，max_tokens 放寬幾倍。推理 token 會**吃掉**這個額度，
-    # 用完 content 會變 null（使用者收到「本鯨想得太久，額度用完了」）。
-    # 思考越深就多留一點；不說要思考時完全不動。
-    reasoning_budget_low: float = 1.2
-    reasoning_budget_high: float = 1.8
+    # 記憶閘而家淨靠 `core/memory.py` 嗰道**免費**嘅啟發式閘（`_worth_extracting`）。
+    # 代價講明：嗰道閘只擋短訊息／純媒體標註，擋唔到「長但冇內容」嘅閒聊，
+    # 嗰種會多跑一次 utility 抽取。詳見 ARCHITECTURE.md。
+    #
+    # 連帶刪走嘅設定（全部零 caller）：decision_enabled、decision_model、
+    # decision_endpoint、decision_timeout_seconds、decision_min_confidence、
+    # decision_context_messages、reasoning_budget_low、reasoning_budget_high、
+    # memory_decision_threshold。
     # ── 群組聊天室模式 ──────────────────────────────────
     # 兩個開關本身係 **per-group、存 DB**（見 core/room.py），唔喺呢度。
     # 呢兩條係窗口大細 —— 全局共用。
@@ -102,11 +94,6 @@ class Settings(BaseSettings):
     # token 保險閘。窗口太長就交 `ReplyChain._trim()` 摺疊中段
     # （同引用串共用嗰個機制）。
     group_room_window_tokens: int = 6_000
-
-    # 記憶抽取的前置閘：Jev 說「這段對話沒有值得記的事實」時，跳過那次抽取
-    # 呼叫。門檻刻意設得低 —— 漏記一則正確的事實，比多花一次便宜呼叫嚴重
-    # 得多，所以這個閘只可以在有把握時才收窄。
-    memory_decision_threshold: float = 0.25
 
     # ── 聯網 ──
     # 搜尋積極程度：
@@ -150,7 +137,11 @@ class Settings(BaseSettings):
     #
     # **beta，預設關著。** 關著的時候完全不會出現，原有行為一模一樣。
     # 開啟之後仍然只有**推理真的開過**的回覆才有內容可貼 —— 推理沒開就
-    # 沒有思考過程（見 /think，以及 Jev 的逐則判斷）。
+    # 沒有思考過程。
+    #
+    # ⚠️ 2026-10-19：呢段以前寫住「見 /think，以及 Jev 的逐則判斷」——
+    # **兩者都已死**（`/think` 冇搬過嚟，Jev 已刪，見上面）。而家推理係
+    # 恆常關掉（`reasoning_enabled`），所以呢個功能開咗都大機會冇嘢貼。
     #
     # 思考內容是模型自言自語的原文，可能覆述到人設或系統提示，所以貼之前
     # 一定過一次 find_system_leak，命中就**整段不貼**。它也不會落庫 ——

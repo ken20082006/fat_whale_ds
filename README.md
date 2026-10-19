@@ -228,11 +228,16 @@ powershell -ExecutionPolicy Bypass -File scripts\run_router.ps1
 記住的事實」，寫進對應場合的筆記。
 
 - 抽取走便宜嘅 utility 模型、關閉推理
-- **先問 Jev 值不值得記**（`FW_MEMORY_DECISION_THRESHOLD`）—— 判斷說沒有
-  的話就跳過整次抽取呼叫
-- 訊息少於 12 字、或只有媒體標註時直接跳過
+- 訊息少於 12 字、或只有媒體標註時直接跳過（`_worth_extracting`，免費啟發式）
 - 已有的事實不會重複寫入；每場合上限 60 則
 - 抽取在背景進行，失敗不影響對話
+
+想手動記住某樣嘢就用 `/remember`。
+
+> ⚠️ **2026-10-19 改動**：以前呢度仲有一道「先問 Jev 值不值得記」
+> （`FW_MEMORY_DECISION_THRESHOLD`）嘅收費閘。Jev 個端點由 2026-10-07
+> 起對本地區永久 403，而佢壞咗係靜默嘅 —— 已刪。詳情見
+> [`hermes/ARCHITECTURE.md`](hermes/ARCHITECTURE.md)。
 
 不想要自動記憶就把 `FW_AUTO_MEMORY` 設為 false，只保留手動 `/remember`。
 
