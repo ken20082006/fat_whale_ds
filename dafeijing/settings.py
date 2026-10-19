@@ -46,16 +46,18 @@ class Settings(BaseSettings):
     max_retries: int = 3
 
     # ── 模型 ──
-    # 預設用 v4.1-flash 而不是舊的 deepseek-chat：更便宜（$0.14/$0.42 對
-    # $0.32/$0.89）、上下文大 6 倍（100 萬對 16 萬）。
+    # 預設用 v4.1-flash 系而不是舊的 deepseek-chat：更便宜、上下文大（100 萬對 16 萬）。
+    # 2026-10-19 由別名 `v4.1-flash` 換成釘死版本 `-1017`，
+    # ⚠️ **貴 6.25 倍**（$0.30/$1.20 對 $0.048/$0.12）—— 換返平嘅係改返個名就得。
     #
     # ⚠️ Router 而家唔用呢個 model 答嘢 —— 對話交畀 Hermes。佢淨低嘅用途係
     # **用量紀錄嗰個標籤**（`router/handlers.py` 寫入 usage 表，`/cost` 靠佢）。
+    # **真正答嘢嘅模型喺 `hermes/data/config.yaml` 嘅 `model:`，兩邊要一齊改。**
     #
     # 以前仲有個 `model_vision`：靜態圖要另揀一個吃得到圖嘅 model。而家
     # 圖片直接交畀 Hermes，冇人再讀嗰個設定 —— 已刪（2026-09-26）。
-    model: str = "deepseek/deepseek-v4.1-flash"
-    model_utility: str = "deepseek/deepseek-v4.1-flash"
+    model: str = "deepseek/deepseek-v4.1-flash-1017"
+    model_utility: str = "deepseek/deepseek-v4.1-flash-1017"
 
     # 這個模型預設會做推理（reasoning），推理 token 以輸出計價且會佔用 max_tokens。
     # 實測關掉後單次費用約降為四分之一，對一般閒聊毫無損失。
@@ -199,8 +201,12 @@ class Settings(BaseSettings):
     # 成本估算（美元／百萬 token）。
     #
     # ⚠️ Hermes 嘅 API **只回 tokens，唔回 cost**，所以 Router 要自己估。
-    # 呢兩個數係 2026-09-26 由 OpenRouter `/v1/models` 攞嘅實價，
-    # 而且對得返 Hermes 自己嘅估算（11968 in + 2 out = $0.0035928，一樣）。
+    # 呢兩個數係 OpenRouter `/v1/models` 嘅實價。2026-10-19 換模型時已核對：
+    # `v4.1-flash-1017` 嘅預設 route（$0.30/$1.20）啱好同舊值一樣，所以呢兩個
+    # 數唔使改。**但呢個係彩數** —— 下次換模型要重新查，唔可以假設。
+    #
+    # ⚠️ OpenRouter 每個 provider 收費唔同（同一個 model id 可以有十幾個
+    # endpoint，$0.05 到 $0.30 都有），呢兩個數係**預設 route** 嗰個。
     #
     # 換模型就要跟住改 —— 唔改嘅話 `/cost` 會報錯數。準確數字始終喺
     # Hermes 自己個 `state.db`（`session_model_usage.estimated_cost_usd`），

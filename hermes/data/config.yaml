@@ -5,7 +5,12 @@
 
 # 同大肥鯨同一個模型。Provider 唔使寫死 —— Hermes 見到
 # OPENROUTER_API_KEY 就自動判定係 OpenRouter（`hermes status` 會顯示）。
-model: deepseek/deepseek-v4.1-flash
+#
+# 2026-10-19 由別名 `deepseek/deepseek-v4.1-flash` 換成**釘死版本**嘅
+# `-1017`（10 月 17 號快照）。代價係貴 —— 實價 $0.30/$1.20 對
+# $0.048/$0.12，即輸入 6.25 倍、輸出 10 倍。好處係行為唔會因為
+# 上游更新別名而靜靜變咗。
+model: deepseek/deepseek-v4.1-flash-1017
 
 platforms:
   telegram:

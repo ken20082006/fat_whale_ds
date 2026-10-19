@@ -77,7 +77,9 @@ observer-only，冇 hook 位改。所以由外面控制 `conversation` 個名。
 - 完整記錄每人每次嘅 token 與估算費用
 - 預設只記錄不封鎖，跑一段時間後再決定配額
 - ⚠️ **費用係估算嘅** —— Hermes 嘅 API 只回 tokens 唔回 cost。
-  價錢喺 `settings.py` 嘅 `hermes_*_price`，換模型要跟住改
+  價錢喺 `settings.py` 嘅 `hermes_*_price`，換模型要跟住改。
+  而家嘅 `v4.1-flash-1017` 係 $0.30/$1.20（每百萬 token）—— 比起
+  原本嗰個別名貴 6.25 倍，兩者啱好同價所以舊數值仍然啱用
 
 ---
 

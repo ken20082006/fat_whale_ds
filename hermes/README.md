@@ -13,7 +13,7 @@
 | Docker image | ✅ `nousresearch/hermes-agent:latest`（2.74GB） |
 | 資料目錄 | ✅ `data/` → 容器 `/opt/data`（= `HERMES_HOME`） |
 | `SOUL.md` 人設 | ✅ 由 `build_soul.py` 生成，**實測語氣正確** |
-| 模型 | ✅ `deepseek/deepseek-v4.1-flash`，Provider 自動判定為 OpenRouter |
+| 模型 | ✅ `deepseek/deepseek-v4.1-flash-1017`（釘死版本，**貴 6.25 倍**），Provider 自動判定為 OpenRouter |
 | OpenRouter 金鑰 | ✅ 沿用大肥鯨同一條 |
 | Telegram bot | ✅ `@deepseekgirl_beta_bot` 已連線（polling） |
 | API server | ✅ `127.0.0.1:8642`，named conversation **實測隔離成功** |

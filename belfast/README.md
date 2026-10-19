@@ -15,7 +15,7 @@ Telegram → Router（dafeijing/router）→ Hermes API → 回覆
 | 人設本體 | `../config/persona.md` | **`persona.md`** |
 | 核心 | 愛認叻但底子虛，一追問就露底 | 可靠、從容、帶一點玩味 |
 | 自稱 / 稱呼 | 「本鯨」/「你」 | 「我」/「指揮官」 |
-| Model | OpenRouter / `deepseek-v4.1-flash` | **xAI / `grok-4.7`** |
+| Model | OpenRouter / `deepseek-v4.1-flash-1017`（大肥鯨） | **xAI / `grok-4.7`** |
 | Telegram 顯示名 | 大肥鯨 | 女僕長 |
 | Container | `hermes` | **`belfast`** |
 | Port | 8642 | **8643**（主機）|
