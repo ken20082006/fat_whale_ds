@@ -31,11 +31,11 @@ def main() -> int:
     # 一定要用唔同名嘅 log 檔 —— 同大肥鯨寫同一個檔會令兩邊紀錄都爛。
     setup_logging(cfg.log_dir, name="router")
 
-    if not cfg.hermes_key:
-        logger.error("FW_HERMES_KEY 未設定 —— 冇佢就入唔到 Hermes API server")
+    if not cfg.dsh_command:
+        logger.error("FW_DSH_COMMAND 未設定 —— 冇佢就起唔到個腦")
         return 1
 
-    logger.info("Router 準備下水…（Hermes 喺 %s）", cfg.hermes_url)
+    logger.info("Router 準備下水…（dsh：%s）", cfg.dsh_command)
     services = create_services(cfg)
     application = build_application(services, cfg)
 

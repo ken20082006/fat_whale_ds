@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from telegram.constants import ChatType
 
 from dafeijing.router.handlers import on_group_message
-from dafeijing.router.hermes import HermesError, Reply
+from dafeijing.router.dsh import DshError, Reply
 
 CHAT = -1001324180809
 BOT_ID = 999
@@ -81,7 +81,7 @@ class FakeChain:
         return list(self._window)
 
 
-class FakeHermes:
+class FakeBrain:
     def __init__(self, text="本鯨收到", boom=False):
         self.calls: list[tuple[str, str]] = []
         self._text = text
@@ -90,7 +90,7 @@ class FakeHermes:
     async def ask(self, conversation, text, images=None) -> Reply:
         self.calls.append((conversation, text))
         if self._boom:
-            raise HermesError("Hermes 回 500")
+            raise DshError("dsh 回 500")
         return Reply(text=self._text, input_tokens=100, output_tokens=5)
 
 
@@ -162,7 +162,7 @@ async def _no_profile(_chat_id):
     return None
 
 
-def _services(chain, hermes, *, room_on=False, read_on=False, cursor=None):
+def _services(chain, brain, *, room_on=False, read_on=False, cursor=None):
     async def ensure(*_a, **_k):
         return None
 
@@ -193,7 +193,7 @@ def _services(chain, hermes, *, room_on=False, read_on=False, cursor=None):
             self_name="本鯨",
         ),
         chain=chain,
-        hermes=hermes,
+        brain=brain,
         rooms=SimpleNamespace(
             status=status, cursor=get_cursor, set_cursor=set_cursor
         ),
@@ -238,24 +238,24 @@ def _run_group(message, svc, bot=None):
 def test_room_on_uses_one_conversation_for_the_whole_group():
     """⭐ 開關 A 嘅全部意義：引用邊個都係同一條對話。"""
     chain = FakeChain({9001: CONV_A})  # 引用本鯨，舊路徑會續返 CONV_A
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(reply_to=_reply_to_bot(9001)),
-        _services(chain, hermes, room_on=True),
+        _services(chain, brain, room_on=True),
     )
 
-    assert hermes.calls[0][0] == ROOM
+    assert brain.calls[0][0] == ROOM
 
 
 def test_room_off_keeps_the_old_per_thread_conversation():
     chain = FakeChain({9001: CONV_A})
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(reply_to=_reply_to_bot(9001)),
-        _services(chain, hermes, room_on=False),
+        _services(chain, brain, room_on=False),
     )
 
-    assert hermes.calls[0][0] == CONV_A
+    assert brain.calls[0][0] == CONV_A
 
 
 def test_room_on_does_not_write_the_conversation_into_the_cache():
@@ -266,7 +266,7 @@ def test_room_on_does_not_write_the_conversation_into_the_cache():
     拉入去。寫 NULL 就乾淨。
     """
     chain = FakeChain()
-    _run_group(_message(), _services(chain, FakeHermes(), room_on=True))
+    _run_group(_message(), _services(chain, FakeBrain(), room_on=True))
 
     cached = [r for r in chain.replies if "conversation" in r]
     assert cached and cached[0]["conversation"] is None
@@ -275,7 +275,7 @@ def test_room_on_does_not_write_the_conversation_into_the_cache():
 def test_room_off_still_writes_the_conversation():
     """唔可以連舊路徑都改成 NULL —— 引用串機制靠佢。"""
     chain = FakeChain()
-    _run_group(_message(), _services(chain, FakeHermes(), room_on=False))
+    _run_group(_message(), _services(chain, FakeBrain(), room_on=False))
 
     cached = [r for r in chain.replies if "conversation" in r]
     assert cached and cached[0]["conversation"] == f"grp:{CHAT}:950"
@@ -286,10 +286,10 @@ def test_room_off_still_writes_the_conversation():
 
 def test_read_on_attaches_the_window_before_the_trigger():
     chain = FakeChain(window=WINDOW)
-    hermes = FakeHermes()
-    _run_group(_message(), _services(chain, hermes, read_on=True))
+    brain = FakeBrain()
+    _run_group(_message(), _services(chain, brain, read_on=True))
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "[群組近況開始]" in body and "[群組近況結束]" in body
     assert "[乙|121] 09-26 10:00" in body
     assert "[陳大文|216587605] 09-27 10:30" in body
@@ -300,7 +300,7 @@ def test_read_on_attaches_the_window_before_the_trigger():
 
 def test_window_excludes_the_bot_and_stops_at_the_trigger():
     chain = FakeChain(window=WINDOW)
-    _run_group(_message(message_id=950), _services(chain, FakeHermes(), read_on=True))
+    _run_group(_message(message_id=950), _services(chain, FakeBrain(), read_on=True))
 
     call = chain.window_calls[0]
     assert call["exclude_user_id"] == BOT_ID, "本鯨自己嘅訊息要隔走"
@@ -310,7 +310,7 @@ def test_window_excludes_the_bot_and_stops_at_the_trigger():
 
 def test_window_uses_the_cursor_as_its_starting_point():
     chain = FakeChain(window=WINDOW)
-    _run_group(_message(), _services(chain, FakeHermes(), read_on=True, cursor=700))
+    _run_group(_message(), _services(chain, FakeBrain(), read_on=True, cursor=700))
 
     assert chain.window_calls[0]["after_message_id"] == 700
 
@@ -318,11 +318,11 @@ def test_window_uses_the_cursor_as_its_starting_point():
 def test_read_off_sends_no_window_at_all():
     """⭐ 開關 B 關 = 原本行為，body 一個字都唔可以變。"""
     chain = FakeChain(window=WINDOW)
-    hermes = FakeHermes()
-    _run_group(_message(), _services(chain, hermes, read_on=False))
+    brain = FakeBrain()
+    _run_group(_message(), _services(chain, brain, read_on=False))
 
     assert chain.window_calls == []
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "[群組近況" not in body
     assert body.endswith(f"[陳大文|{USER_ID}]\n咁你覺得點")
 
@@ -343,13 +343,13 @@ def test_window_and_quote_chain_do_not_repeat_the_same_message():
         "created_at": "2026-09-27 03:00:00",
     }
     chain = FakeChain(chain=[shared], window=[shared])
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(reply_to=_reply_stub_for_chain(802)),
-        _services(chain, hermes, read_on=True),
+        _services(chain, brain, read_on=True),
     )
 
-    assert hermes.calls[0][1].count("獨一無二嘅句子") == 1
+    assert brain.calls[0][1].count("獨一無二嘅句子") == 1
 
 
 def test_quote_chain_entries_not_in_the_window_still_appear():
@@ -362,13 +362,13 @@ def test_quote_chain_entries_not_in_the_window_still_appear():
         "created_at": "2026-09-20 02:00:00",
     }
     chain = FakeChain(chain=[older], window=WINDOW)
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(reply_to=_reply_stub_for_chain(500)),
-        _services(chain, hermes, read_on=True),
+        _services(chain, brain, read_on=True),
     )
 
-    assert "好耐之前嗰句" in hermes.calls[0][1]
+    assert "好耐之前嗰句" in brain.calls[0][1]
 
 
 def _reply_stub_for_chain(message_id: int):
@@ -398,7 +398,7 @@ def test_successful_reply_advances_the_cursor():
     chain = FakeChain()
     _run_group(
         _message(message_id=950),
-        _services(chain, FakeHermes(), room_on=True, read_on=True),
+        _services(chain, FakeBrain(), room_on=True, read_on=True),
     )
 
     assert _cursor_calls(chain) == [(ROOM, 950)]
@@ -410,18 +410,18 @@ def test_cursor_is_keyed_by_the_actual_conversation():
     chain = FakeChain()
     _run_group(
         _message(message_id=950),
-        _services(chain, FakeHermes(), room_on=False, read_on=True),
+        _services(chain, FakeBrain(), room_on=False, read_on=True),
     )
 
     assert _cursor_calls(chain) == [(f"grp:{CHAT}:950", 950)]
 
 
-def test_hermes_failure_does_not_advance_the_cursor():
+def test_dsh_failure_does_not_advance_the_cursor():
     """⭐ 失敗就唔可以推 —— 嗰啲訊息 Hermes 根本冇收過，下次要重送。"""
     chain = FakeChain()
     _run_group(
         _message(message_id=950),
-        _services(chain, FakeHermes(boom=True), read_on=True),
+        _services(chain, FakeBrain(boom=True), read_on=True),
     )
 
     assert _cursor_calls(chain) == []
@@ -430,6 +430,6 @@ def test_hermes_failure_does_not_advance_the_cursor():
 def test_read_off_does_not_advance_the_cursor():
     """冇送過近況就唔應該推 —— 否則日後開返 B 會漏咗中間嗰批。"""
     chain = FakeChain()
-    _run_group(_message(message_id=950), _services(chain, FakeHermes(), read_on=False))
+    _run_group(_message(message_id=950), _services(chain, FakeBrain(), read_on=False))
 
     assert _cursor_calls(chain) == []

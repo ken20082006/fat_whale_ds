@@ -8,11 +8,15 @@
 - `sessions` / `memory` —— per-user 筆記。Hermes 嗰份 `USER.md` 係 profile
   全域，冇 per-sender 概念，所以呢件事一定要自己做（見 router/memory.py）。
 - `llm` —— 只為咗背景抽取筆記而存在。呢個係 utility 工作，
-  唔係對話：用 Hermes 做要成 17k tokens 一次，用 OpenRouter 直打係千幾。
-  對話本身仍然 100% 經 Hermes。
+  唔係對話：用 dsh 做要成 17k tokens 一次，用 OpenRouter 直打係千幾。
+  對話本身仍然 100% 經 dsh。
 
   （2026-10-19：以前喺隔籬仲有個 `decisions` —— Jev 記憶閘。個端點由
   2026-10-07 起地區封鎖 403，已刪。）
+
+（2026-10-20：個腦由 Hermes 換成 DeepSeek Harness。介面由
+`hermes.py` 換成 `dsh.py`，但 Router 嘅形狀冇變 —— 一樣係
+`ask(conversation, text, images)` 回一個 `Reply`。）
 """
 
 from __future__ import annotations
@@ -31,8 +35,8 @@ from ..core.usage import UsageLog
 from ..llm.openrouter import OpenRouterClient
 from ..settings import Settings
 from ..store.db import Database
+from .dsh import DshClient
 from .guards import RunawayGuard
-from .hermes import HermesClient
 
 
 @dataclass
@@ -43,7 +47,7 @@ class RouterServices:
     chain: ReplyChain
     limiter: RateLimiter
     group_access: MembershipCache
-    hermes: HermesClient
+    brain: DshClient
     sessions: SessionManager
     llm: OpenRouterClient
     memory: MemoryExtractor
@@ -84,16 +88,20 @@ def create_services(cfg: Settings) -> RouterServices:
         chain=ReplyChain(db, cfg),
         limiter=RateLimiter(cfg.rate_per_minute),
         group_access=MembershipCache(ttl_seconds=cfg.group_membership_ttl_seconds),
-        hermes=HermesClient(cfg.hermes_url, cfg.hermes_key),
+        brain=DshClient(
+            cfg.dsh_command.split(),
+            timeout=cfg.dsh_timeout_seconds,
+            startup_timeout=cfg.dsh_startup_timeout_seconds,
+        ),
         sessions=sessions,
         llm=llm,
         memory=MemoryExtractor(cfg, sessions, llm),
         # 群組概況：每個群一則氣氛/慣例。同筆記一樣要自己排程更新，
-        # 因為 Hermes 嗰邊冇呢個概念。
+        # 因為 dsh 嗰邊冇呢個概念。
         profiler=GroupProfiler(cfg, sessions, llm),
         # 貼圖庫由 app.py 嘅 post_init 載入（要等 db 連上先讀得到）。
         stickers=StickerLibrary(cfg),
-        # 記低每次 Hermes 呼叫嘅用量 —— Hermes 唔回 cost，所以要自己估。
+        # 記低每次 dsh 呼叫嘅用量 —— dsh 唔回 cost，所以要自己估。
         usage=UsageLog(db),
         rooms=RoomMode(db),
         runaway=RunawayGuard(

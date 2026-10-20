@@ -54,3 +54,12 @@ belfast/data/*
 !belfast/data/config.yaml
 
 belfast/__pycache__/
+
+# ── dsh/（DeepSeek Harness 嘅家）──────────────────────
+#
+# 同 hermes/ 一樣：**只追設定**。`dsh/data/` 係 profile 嘅執行期狀態
+# （sessions、attachments、pnpm 嘅 node_modules…），入版控只會製造噪音。
+#
+# 人設唔喺呢度 —— SOUL.md 仍然喺 `hermes/data/SOUL.md`（已追蹤），
+# compose 掛去 dsh 再由 entrypoint 砌入 persona。
+dsh/data/

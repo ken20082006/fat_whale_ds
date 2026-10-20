@@ -37,7 +37,7 @@ from .conversation import (
     room_conversation,
 )
 from .guards import is_bot_sender
-from .hermes import HermesError
+from .dsh import DshError
 from .images import collect_images
 from .memory import (
     MAX_MENTIONED_NOTES,
@@ -388,9 +388,9 @@ async def _deliver(
     """
     try:
         async with typing(bot, message.chat_id):
-            reply = await svc.hermes.ask(conversation, text, images=images)
-    except HermesError as exc:
-        logger.warning("Hermes 失敗（%s）：%s", conversation, exc)
+            reply = await svc.brain.ask(conversation, text, images=images)
+    except DshError as exc:
+        logger.warning("dsh 失敗（%s）：%s", conversation, exc)
         svc.errors += 1
         await reply_plain(
             message, f"{svc.cfg.self_name}這邊出了點狀況，等一下再試。"

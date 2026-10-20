@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from telegram.constants import ChatType
 
 from dafeijing.router.handlers import on_group_message, on_private_message
-from dafeijing.router.hermes import HermesError, Reply
+from dafeijing.router.dsh import DshError, Reply
 
 CHAT = -1001324180809
 BOT_ID = 999
@@ -75,7 +75,7 @@ class FakeChain:
         self.replies.append(kwargs)
 
 
-class FakeHermes:
+class FakeBrain:
     def __init__(self, text: str = "本鯨收到", boom: bool = False):
         self.calls: list[tuple[str, str]] = []
         self.images: list[list[str] | None] = []
@@ -86,7 +86,7 @@ class FakeHermes:
         self.calls.append((conversation, text))
         self.images.append(images)
         if self._boom:
-            raise HermesError("Hermes 回 500")
+            raise DshError("dsh 回 500")
         return Reply(text=self._text, input_tokens=100, output_tokens=5)
 
 
@@ -182,7 +182,7 @@ async def _no_profile(_chat_id: int):
     return None
 
 
-def _services(chain, hermes):
+def _services(chain, brain):
     async def ensure(*_a, **_k):
         return None
 
@@ -204,7 +204,7 @@ def _services(chain, hermes):
             self_name="本鯨",
         ),
         chain=chain,
-        hermes=hermes,
+        brain=brain,
         sessions=SimpleNamespace(notes=notes, get_group_profile=_no_profile),
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
@@ -253,65 +253,65 @@ def _run_group(message, svc, bot=None):
 
 def test_bare_mention_starts_a_new_conversation():
     """唔引用任何嘢 → 開新對話，唔係續返上一條。"""
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _services(FakeChain(), brain))
 
-    assert hermes.calls[0][0] == f"grp:{CHAT}:500"
+    assert brain.calls[0][0] == f"grp:{CHAT}:500"
 
 
 def test_two_bare_mentions_are_two_conversations():
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
-    _run_group(_message(message_id=700), _services(FakeChain(), hermes))
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _services(FakeChain(), brain))
+    _run_group(_message(message_id=700), _services(FakeChain(), brain))
 
-    assert hermes.calls[0][0] != hermes.calls[1][0]
+    assert brain.calls[0][0] != brain.calls[1][0]
 
 
 def test_quoting_the_bot_reuses_its_conversation():
     """**核心規則。** 用戶2 引用本鯨嘅回答 → 同一條串。"""
     chain = FakeChain({9001: CONV_A})
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(message_id=950, reply_to=_reply_to_bot(9001)),
-        _services(chain, hermes),
+        _services(chain, brain),
     )
 
-    assert hermes.calls[0][0] == CONV_A
+    assert brain.calls[0][0] == CONV_A
 
 
 def test_quoting_another_user_is_NOT_the_same_conversation():
     """**用戶特別強調嘅一條。** 用戶3 引用用戶2 —— 唔算同一串。"""
     chain = FakeChain({9001: CONV_A})  # 本鯨嗰則喺度，但引用嘅唔係佢
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(message_id=960, reply_to=_reply_to_user(300)),
-        _services(chain, hermes),
+        _services(chain, brain),
     )
 
-    assert hermes.calls[0][0] != CONV_A
-    assert hermes.calls[0][0] == f"grp:{CHAT}:960", "應該用自己嘅 message_id 開新串"
+    assert brain.calls[0][0] != CONV_A
+    assert brain.calls[0][0] == f"grp:{CHAT}:960", "應該用自己嘅 message_id 開新串"
 
 
 def test_quoting_a_bot_message_with_no_record_starts_a_new_conversation():
     """引用本鯨，但快取冇紀錄（例如重啟後第一次見到）→ 唯有開新串。"""
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(message_id=970, reply_to=_reply_to_bot(1111)),
-        _services(FakeChain(), hermes),
+        _services(FakeChain(), brain),
     )
 
-    assert hermes.calls[0][0] == f"grp:{CHAT}:970"
+    assert brain.calls[0][0] == f"grp:{CHAT}:970"
 
 
 def test_two_replies_to_the_same_bot_message_share_one_conversation():
     """兩個人都引用同一則本鯨回覆 → 同一條對話（多人共時參與）。"""
     chain = FakeChain({9001: CONV_A})
-    hermes = FakeHermes()
+    brain = FakeBrain()
 
-    _run_group(_message(message_id=950, reply_to=_reply_to_bot(9001)), _services(chain, hermes))
-    _run_group(_message(message_id=951, reply_to=_reply_to_bot(9001)), _services(chain, hermes))
+    _run_group(_message(message_id=950, reply_to=_reply_to_bot(9001)), _services(chain, brain))
+    _run_group(_message(message_id=951, reply_to=_reply_to_bot(9001)), _services(chain, brain))
 
-    assert hermes.calls[0][0] == hermes.calls[1][0] == CONV_A
+    assert brain.calls[0][0] == brain.calls[1][0] == CONV_A
 
 
 # ── 補快取自己嘅回覆 ────────────────────────────────────
@@ -320,7 +320,7 @@ def test_two_replies_to_the_same_bot_message_share_one_conversation():
 def test_bot_reply_is_cached_with_its_conversation():
     """**最易漏嘅一步。** 冇記住對話名，別人引用本鯨就接唔返。"""
     chain = FakeChain()
-    _run_group(_message(message_id=500), _services(chain, FakeHermes(text="本鯨答你")))
+    _run_group(_message(message_id=500), _services(chain, FakeBrain(text="本鯨答你")))
 
     assert len(chain.replies) == 1
     cached = chain.replies[0]
@@ -336,7 +336,7 @@ def test_cached_conversation_matches_what_was_asked():
     chain = FakeChain({9001: CONV_A})
     _run_group(
         _message(message_id=950, reply_to=_reply_to_bot(9001)),
-        _services(chain, FakeHermes()),
+        _services(chain, FakeBrain()),
     )
 
     assert chain.replies[0]["conversation"] == CONV_A
@@ -346,14 +346,14 @@ def test_reply_to_message_is_cached_for_lookup():
     """Bot API 收唔到其他 bot 嘅訊息，要靠即時更新補上。"""
     chain = FakeChain()
     parent = _reply_to_bot(9001)
-    _run_group(_message(message_id=950, reply_to=parent), _services(chain, FakeHermes()))
+    _run_group(_message(message_id=950, reply_to=parent), _services(chain, FakeBrain()))
 
     assert chain.reply_updates == [parent]
 
 
 def test_nothing_is_cached_when_hermes_fails():
     chain = FakeChain()
-    _run_group(_message(message_id=500), _services(chain, FakeHermes(boom=True)))
+    _run_group(_message(message_id=500), _services(chain, FakeBrain(boom=True)))
 
     assert chain.replies == []
 
@@ -364,25 +364,25 @@ def test_nothing_is_cached_when_hermes_fails():
 def test_only_the_triggering_message_is_sent():
     """一條對話入面除咗觸發訊息就係本鯨自己嘅回覆，Hermes 已經有齊歷史。"""
     chain = FakeChain({9001: CONV_A})
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="咁你覺得點", message_id=950, reply_to=_reply_to_bot(9001)),
-        _services(chain, hermes),
+        _services(chain, brain),
     )
 
-    _, body = hermes.calls[0]
+    _, body = brain.calls[0]
     assert body.endswith(f"[陳大文|{USER_ID}]\n咁你覺得點")
     assert body.count("[陳大文|") == 1, "只送觸發嗰一句，唔可以重送歷史"
 
 
 def test_media_only_message_still_has_text():
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="〔圖片〕", message_id=500),
-        _services(FakeChain(), hermes),
+        _services(FakeChain(), brain),
     )
 
-    assert hermes.calls[0][1].endswith(f"[陳大文|{USER_ID}]\n〔圖片〕")
+    assert brain.calls[0][1].endswith(f"[陳大文|{USER_ID}]\n〔圖片〕")
 
 
 def test_trigger_message_carries_a_local_timestamp():
@@ -390,13 +390,13 @@ def test_trigger_message_carries_a_local_timestamp():
 
     2026-09-27 12:24 UTC = 20:24 HKT。
     """
-    hermes = FakeHermes()
+    brain = FakeBrain()
     message = _message(text="咁你覺得點", message_id=950)
     message.date = datetime(2026, 9, 27, 12, 24, tzinfo=timezone.utc)
 
-    _run_group(message, _services(FakeChain(), hermes))
+    _run_group(message, _services(FakeChain(), brain))
 
-    assert hermes.calls[0][1].endswith(
+    assert brain.calls[0][1].endswith(
         f"[陳大文|{USER_ID}] 09-27 20:24\n咁你覺得點"
     )
 
@@ -424,13 +424,13 @@ def test_quoted_chain_messages_carry_their_own_timestamps():
             },
         ]
     )
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="咁點", message_id=950, reply_to=_reply_stub(701, 222, "乙")),
-        _services(chain, hermes),
+        _services(chain, brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "[甲|111] 09-26 10:00" in body
     assert "[乙|222] 09-27 10:30" in body
 
@@ -439,20 +439,20 @@ def test_quoted_chain_messages_carry_their_own_timestamps():
 
 
 def test_private_message_uses_one_conversation():
-    hermes = FakeHermes()
-    svc = _services(FakeChain(), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain(), brain)
     message = _message(chat_type=ChatType.PRIVATE, message_id=1)
     update = SimpleNamespace(effective_message=message, effective_user=message.from_user)
 
     asyncio.run(on_private_message(update, _context(svc)))
     asyncio.run(on_private_message(update, _context(svc)))
 
-    assert hermes.calls[0][0] == hermes.calls[1][0] == f"dm:{CHAT}"
+    assert brain.calls[0][0] == brain.calls[1][0] == f"dm:{CHAT}"
 
 
 def test_private_topics_are_separate_conversations():
-    hermes = FakeHermes()
-    svc = _services(FakeChain(), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain(), brain)
 
     for thread_id in (1976030, 1976034):
         message = _message(chat_type=ChatType.PRIVATE, thread_id=thread_id)
@@ -461,8 +461,8 @@ def test_private_topics_are_separate_conversations():
         )
         asyncio.run(on_private_message(update, _context(svc)))
 
-    assert hermes.calls[0][0] != hermes.calls[1][0]
-    assert all(c[0].startswith("dm:") for c in hermes.calls)
+    assert brain.calls[0][0] != brain.calls[1][0]
+    assert all(c[0].startswith("dm:") for c in brain.calls)
 
 
 # ── 圖片轉發 ────────────────────────────────────────────
@@ -483,17 +483,17 @@ def _photo_message(monkeypatch, bot=None, data_url: str = "data:image/jpeg;base6
 
 
 def test_photo_reaches_hermes_as_an_inline_image(monkeypatch):
-    hermes = FakeHermes()
-    _run_group(_photo_message(monkeypatch), _services(FakeChain(), hermes))
+    brain = FakeBrain()
+    _run_group(_photo_message(monkeypatch), _services(FakeChain(), brain))
 
-    assert hermes.images[0] == ["data:image/jpeg;base64,AAA"]
+    assert brain.images[0] == ["data:image/jpeg;base64,AAA"]
 
 
 def test_text_only_message_sends_no_images():
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _services(FakeChain(), brain))
 
-    assert not hermes.images[0]
+    assert not brain.images[0]
 
 
 # ── 貼圖 ────────────────────────────────────────────────
@@ -514,8 +514,8 @@ class FakeStickers:
         return None
 
 
-def _sticker_svc(chain, hermes, stickers, bot=None):
-    svc = _services(chain, hermes)
+def _sticker_svc(chain, brain, stickers, bot=None):
+    svc = _services(chain, brain)
     svc.stickers = stickers
     return svc
 
@@ -529,43 +529,43 @@ def _mention_with_bot(message_id=500):
 def test_sticker_menu_is_attached_once_per_conversation():
     """清單每則都附嘅話，會不斷累積入 Hermes 嘅對話歷史，越傾越貴。"""
     stickers = FakeStickers()
-    hermes = FakeHermes()
-    svc = _sticker_svc(FakeChain({9001: CONV_A}), hermes, stickers)
+    brain = FakeBrain()
+    svc = _sticker_svc(FakeChain({9001: CONV_A}), brain, stickers)
 
     # 兩次都引用本鯨同一則 → 同一條對話
     _run_group(_message(message_id=950, reply_to=_reply_to_bot(9001)), svc)
     _run_group(_message(message_id=951, reply_to=_reply_to_bot(9001)), svc)
 
-    assert hermes.calls[0][0] == hermes.calls[1][0] == CONV_A
-    assert "<可用貼圖>" in hermes.calls[0][1], "第一則要附"
-    assert "<可用貼圖>" not in hermes.calls[1][1], "第二則唔可以再附"
+    assert brain.calls[0][0] == brain.calls[1][0] == CONV_A
+    assert "<可用貼圖>" in brain.calls[0][1], "第一則要附"
+    assert "<可用貼圖>" not in brain.calls[1][1], "第二則唔可以再附"
 
 
 def test_sticker_menu_is_attached_for_each_new_conversation():
     stickers = FakeStickers()
-    hermes = FakeHermes()
-    svc = _sticker_svc(FakeChain(), hermes, stickers)
+    brain = FakeBrain()
+    svc = _sticker_svc(FakeChain(), brain, stickers)
 
     _run_group(_message(message_id=500), svc)
     _run_group(_message(message_id=501), svc)
 
-    assert hermes.calls[0][0] != hermes.calls[1][0], "兩條唔同對話"
-    assert "<可用貼圖>" in hermes.calls[0][1]
-    assert "<可用貼圖>" in hermes.calls[1][1]
+    assert brain.calls[0][0] != brain.calls[1][0], "兩條唔同對話"
+    assert "<可用貼圖>" in brain.calls[0][1]
+    assert "<可用貼圖>" in brain.calls[1][1]
 
 
 def test_no_menu_block_when_the_library_is_empty():
-    hermes = FakeHermes()
-    _run_group(_message(), _sticker_svc(FakeChain(), hermes, FakeStickers(menu="")))
+    brain = FakeBrain()
+    _run_group(_message(), _sticker_svc(FakeChain(), brain, FakeStickers(menu="")))
 
-    assert "<可用貼圖>" not in hermes.calls[0][1]
+    assert "<可用貼圖>" not in brain.calls[0][1]
 
 
 def test_marker_in_the_reply_sends_the_sticker_and_is_stripped():
     chain = FakeChain()
-    hermes = FakeHermes(text="好呀本鯨幫你睇[[貼圖:1]]")
+    brain = FakeBrain(text="好呀本鯨幫你睇[[貼圖:1]]")
     message, bot = _mention_with_bot()
-    svc = _sticker_svc(chain, hermes, FakeStickers())
+    svc = _sticker_svc(chain, brain, FakeStickers())
 
     _run_group(message, svc, bot)
 
@@ -576,9 +576,9 @@ def test_marker_in_the_reply_sends_the_sticker_and_is_stripped():
 def test_sticker_message_is_cached_so_the_chain_survives():
     """冇補快取嘅話，別人引用嗰張貼圖時條串會斷。"""
     chain = FakeChain()
-    hermes = FakeHermes(text="睇下[[貼圖:1]]")
+    brain = FakeBrain(text="睇下[[貼圖:1]]")
     message, bot = _mention_with_bot()
-    svc = _sticker_svc(chain, hermes, FakeStickers())
+    svc = _sticker_svc(chain, brain, FakeStickers())
 
     _run_group(message, svc, bot)
 
@@ -591,9 +591,9 @@ def test_sticker_message_is_cached_so_the_chain_survives():
 
 def test_unknown_sticker_number_sends_nothing_and_does_not_crash():
     """模型編錯號 —— 靜靜哋當冇，唔可以拋錯。"""
-    hermes = FakeHermes(text="好[[貼圖:999]]")
+    brain = FakeBrain(text="好[[貼圖:999]]")
     message, bot = _mention_with_bot()
-    svc = _sticker_svc(FakeChain(), hermes, FakeStickers())
+    svc = _sticker_svc(FakeChain(), brain, FakeStickers())
 
     _run_group(message, svc, bot)
 
@@ -608,8 +608,8 @@ def test_unknown_sticker_number_sends_nothing_and_does_not_crash():
 # 呢個分野要跟返 —— 喺群組加個人閘會令群友全部冇反應。
 
 
-def _gate_svc(hermes, *, active: bool, admin: bool):
-    svc = _services(FakeChain(), hermes)
+def _gate_svc(brain, *, active: bool, admin: bool):
+    svc = _services(FakeChain(), brain)
     svc.is_admin = lambda _uid: admin
 
     async def _is_active(_uid: int) -> bool:
@@ -625,26 +625,26 @@ def _gate_svc(hermes, *, active: bool, admin: bool):
 def test_group_member_is_served_even_when_not_active():
     """**大肥鯨冇喺群組擋人。** 佢嘅閘係 group_usable（管理員在場），
     唔係逐個人嘅邀請碼狀態。加咗個人閘會令群友全部冇反應。"""
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _gate_svc(hermes, active=False, admin=False))
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _gate_svc(brain, active=False, admin=False))
 
-    assert len(hermes.calls) == 1, "群友應該照用得到"
+    assert len(brain.calls) == 1, "群友應該照用得到"
 
 
 def test_group_member_uses_the_group_scope_for_notes():
     """群友冇用戶列都要讀得到筆記（大肥鯨會即場 ensure 一列）。"""
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _gate_svc(hermes, active=False, admin=False))
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _gate_svc(brain, active=False, admin=False))
 
-    assert hermes.calls[0][0] == f"grp:{CHAT}:500"
+    assert brain.calls[0][0] == f"grp:{CHAT}:500"
 
 
 def test_a_stranger_dm_is_ignored():
     """私聊跟大肥鯨 —— 未啟用嘅人入唔到嚟。"""
-    hermes = FakeHermes()
+    brain = FakeBrain()
     bot = FakeBot()
     message = _message(chat_type=ChatType.PRIVATE, message_id=1, bot=bot)
-    svc = _gate_svc(hermes, active=False, admin=False)
+    svc = _gate_svc(brain, active=False, admin=False)
 
     asyncio.run(
         on_private_message(
@@ -655,21 +655,21 @@ def test_a_stranger_dm_is_ignored():
         )
     )
 
-    assert hermes.calls == [], "唔應該叫 Hermes"
+    assert brain.calls == [], "唔應該叫 dsh"
     assert bot.sent == [], "連拒絕都唔應該回 —— 免得變成回音壁"
 
 
 def test_an_active_user_can_dm():
-    hermes = FakeHermes()
-    _run_private_dm(_gate_svc(hermes, active=True, admin=False))
-    assert len(hermes.calls) == 1
+    brain = FakeBrain()
+    _run_private_dm(_gate_svc(brain, active=True, admin=False))
+    assert len(brain.calls) == 1
 
 
 def test_the_admin_can_dm_even_when_not_active():
     """管理員唔應該被自己個閘鎖住喺外面。"""
-    hermes = FakeHermes()
-    _run_private_dm(_gate_svc(hermes, active=False, admin=True))
-    assert len(hermes.calls) == 1
+    brain = FakeBrain()
+    _run_private_dm(_gate_svc(brain, active=False, admin=True))
+    assert len(brain.calls) == 1
 
 
 def _run_private_dm(svc):
@@ -705,13 +705,13 @@ def test_whole_chain_is_included_not_just_the_last_one():
         _entry(3, 333, "丙", "第三句"),
         _entry(500, USER_ID, "陳大文", "我嘅回應"),  # 觸發嗰則
     ]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "第一句" in body, "唔可以只附最尾嗰則"
     assert "第二句" in body
     assert "第三句" in body
@@ -725,13 +725,13 @@ def test_chain_is_in_chronological_order():
         _entry(3, 333, "丙", "最尾嗰句"),
         _entry(500, USER_ID, "陳大文", "我嘅回應"),
     ]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert body.index("最早嗰句") < body.index("中間嗰句") < body.index("最尾嗰句")
     assert body.index("最尾嗰句") < body.index("我嘅回應")
 
@@ -743,26 +743,26 @@ def test_every_chain_message_keeps_its_speaker():
         _entry(2, 222, "乙", "乙講嘅"),
         _entry(500, USER_ID, "陳大文", "我嘅回應"),
     ]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(2)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "[甲|111]" in body
     assert "[乙|222]" in body
 
 
 def test_the_trigger_is_not_duplicated():
     chain = [_entry(1, 111, "甲", "舊句"), _entry(500, USER_ID, "陳大文", "我嘅回應")]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(1)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert body.count("我嘅回應") == 1, "觸發嗰句會另外送，唔好喺串入面再嚟一次"
 
 
@@ -774,13 +774,13 @@ def test_elision_marker_gets_no_speaker():
         _entry(3, 333, "丙", "收尾"),
         _entry(500, USER_ID, "陳大文", "我嘅回應"),
     ]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(3)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "中間省略 5 則" in body
     assert "[None|" not in body
 
@@ -791,39 +791,39 @@ def test_media_only_chain_entries_are_skipped():
         _entry(2, 222, "乙", "有字"),
         _entry(500, USER_ID, "陳大文", "我嘅回應"),
     ]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     _run_group(
         _message(text="我嘅回應", message_id=500, reply_to=_reply_to_user(2)),
-        _services(FakeChain(chain=chain), hermes),
+        _services(FakeChain(chain=chain), brain),
     )
 
-    assert "有字" in hermes.calls[0][1]
+    assert "有字" in brain.calls[0][1]
 
 
 def test_falls_back_to_the_immediate_parent_when_the_cache_misses():
     """重啟之後第一次見到 —— 快取追唔到，至少附返最尾嗰則。"""
-    hermes = FakeHermes()
+    brain = FakeBrain()
     parent = _reply_to_user(message_id=300, text="快取冇嘅一句")
     _run_group(
         _message(text="你覺得點", message_id=950, reply_to=parent),
-        _services(FakeChain(chain=[]), hermes),
+        _services(FakeChain(chain=[]), brain),
     )
 
-    assert "快取冇嘅一句" in hermes.calls[0][1]
+    assert "快取冇嘅一句" in brain.calls[0][1]
 
 
 def test_quoting_the_bot_attaches_no_chain():
     """續同一條對話 —— Hermes 歷史已經有齊，再送會重複。"""
     chain = [_entry(1, 111, "甲", "久遠嗰句"), _entry(9001, BOT_ID, "大肥鯨", "本鯨答過")]
-    hermes = FakeHermes()
+    brain = FakeBrain()
     parent = _reply_to_bot(9001)
     parent.text = "本鯨答過"
     _run_group(
         _message(text="咁你覺得點", message_id=950, reply_to=parent),
-        _services(FakeChain({9001: CONV_A}, chain=chain), hermes),
+        _services(FakeChain({9001: CONV_A}, chain=chain), brain),
     )
 
-    body = hermes.calls[0][1]
+    body = brain.calls[0][1]
     assert "久遠嗰句" not in body
     assert "本鯨答過" not in body
 
@@ -842,50 +842,50 @@ def _bot_message(*, is_bot=True, message_id=500):
 def test_a_message_from_another_bot_is_ignored():
     """**呢個就係斷開循環嘅位。** 另一個 bot 引用本鯨嘅回覆 ——
     `is_addressed_to_bot` 當佢係被指名，但佢唔係人。"""
-    hermes = FakeHermes()
-    svc = _services(FakeChain({9001: CONV_A}), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain({9001: CONV_A}), brain)
     parent = _reply_to_bot(9001)
 
     _run_group(_bot_message(message_id=950), svc)
 
-    assert hermes.calls == [], "唔可以叫 Hermes"
-    assert hermes.calls == [], "亦唔可以有任何快取動作"
+    assert brain.calls == [], "唔可以叫 Hermes"
+    assert brain.calls == [], "亦唔可以有任何快取動作"
 
 
 def test_a_human_message_is_unaffected():
     """呢道閘唔可以誤擋真人。"""
-    hermes = FakeHermes()
-    _run_group(_message(message_id=500), _services(FakeChain(), hermes))
-    assert len(hermes.calls) == 1
+    brain = FakeBrain()
+    _run_group(_message(message_id=500), _services(FakeChain(), brain))
+    assert len(brain.calls) == 1
 
 
 def test_allow_bots_lets_it_through_when_asked():
     """想試 bot-to-bot 嘅話可以開，但預設係關。"""
-    hermes = FakeHermes()
-    svc = _services(FakeChain({9001: CONV_A}), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain({9001: CONV_A}), brain)
     svc.cfg.allow_bots = True
 
     _run_group(_bot_message(message_id=950), svc)
 
-    assert len(hermes.calls) == 1
+    assert len(brain.calls) == 1
 
 
 def test_runaway_guard_blocks_before_any_work():
     """剎停要喺下載媒體之前 —— 失控嗰陣最貴嘅係 Hermes 嗰一 call。"""
-    hermes = FakeHermes()
-    svc = _services(FakeChain(), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain(), brain)
     svc.runaway = SimpleNamespace(allow=lambda _c: False)
 
     _run_group(_message(message_id=500), svc)
 
-    assert hermes.calls == []
+    assert brain.calls == []
 
 
 def test_runaway_guard_is_asked_about_the_conversation():
     """要用對話名做鍵 —— 一條串失控唔應該拖累另一條。"""
     asked: list[str] = []
-    hermes = FakeHermes()
-    svc = _services(FakeChain(), hermes)
+    brain = FakeBrain()
+    svc = _services(FakeChain(), brain)
     svc.runaway = SimpleNamespace(allow=lambda c: (asked.append(c), True)[1])
 
     _run_group(_message(message_id=500), svc)
@@ -894,11 +894,11 @@ def test_runaway_guard_is_asked_about_the_conversation():
 
 
 def test_private_bot_sender_is_ignored():
-    hermes = FakeHermes()
+    brain = FakeBrain()
     bot = FakeBot()
     message = _bot_message(message_id=1)
     message.chat = SimpleNamespace(id=CHAT, type=ChatType.PRIVATE)
-    svc = _services(FakeChain(), hermes)
+    svc = _services(FakeChain(), brain)
 
     asyncio.run(
         on_private_message(
@@ -909,4 +909,4 @@ def test_private_bot_sender_is_ignored():
         )
     )
 
-    assert hermes.calls == []
+    assert brain.calls == []

@@ -18,7 +18,7 @@ from telegram.constants import ChatType
 from dafeijing.core.session import PRIVATE_SCOPE, scope_for
 from dafeijing.router.handlers import on_group_message, on_private_message
 from dafeijing.router.memory import with_notes
-from dafeijing.router.hermes import Reply
+from dafeijing.router.dsh import Reply
 
 CHAT = -1001324180809
 BOT_ID = 999
@@ -206,7 +206,7 @@ def _services(sessions, hermes, memory=None):
             allow_bots=False,
         ),
         chain=FakeChain(),
-        hermes=hermes,
+        brain=hermes,
         sessions=sessions,
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),
@@ -474,7 +474,7 @@ def _rich_services(sessions, hermes, chain=None):
             allow_bots=False,
         ),
         chain=chain or RosterChain(),
-        hermes=hermes,
+        brain=hermes,
         sessions=sessions,
         profiler=SimpleNamespace(schedule=lambda _cid: None),
         usage=SimpleNamespace(record=_noop_record),

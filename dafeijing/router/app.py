@@ -93,11 +93,18 @@ async def _post_init(application: Application) -> None:
     svc.bot_name = me.first_name or svc.bot_name
     svc.started_at = time.time()
 
+    # 預先起 dsh process —— 第一則訊息唔使等成個 Cordis tree 載入。
+    # 起唔到都唔阻止 Router 上線：`ask()` 會自己再試一次。
+    try:
+        await svc.brain.start()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("起唔到 dsh（%s）：%s", svc.cfg.dsh_command, exc)
+
     logger.info(
-        "Router 上線：@%s（id=%s）｜Hermes %s｜管理員 %s",
+        "Router 上線：@%s（id=%s）｜dsh %s｜管理員 %s",
         svc.bot_username,
         svc.bot_id,
-        svc.cfg.hermes_url,
+        svc.cfg.dsh_command,
         sorted(svc.cfg.admin_ids) or "（未設定）",
     )
     if not svc.cfg.admin_ids:
@@ -114,7 +121,7 @@ async def _post_shutdown(application: Application) -> None:
     await svc.memory.drain()
     await svc.profiler.drain()
     await svc.llm.close()
-    await svc.hermes.close()
+    await svc.brain.close()
     await svc.db.close()
 
 

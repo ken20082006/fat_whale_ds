@@ -30,30 +30,16 @@
 
 services:
   # ── 大肥鯨 ─────────────────────────────────────────
-  hermes:
-    image: nousresearch/hermes-agent:latest
-    container_name: hermes
-    restart: unless-stopped
-
-    # gateway run 由 s6-overlay 監管：掛咗兩秒內自己起返。
-    command: ["gateway", "run"]
-
-    volumes:
-      - ./hermes/data:/opt/data
-
-    # 只綁 127.0.0.1 —— 唔好開出公網。
-    ports:
-      - "127.0.0.1:8642:8642"
-
-    environment:
-      - TZ=${TZ:-Asia/Hong_Kong}
-
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
+  # 個腦：DeepSeek Harness（2026-10-20 由 Hermes 換過嚟）。
+  #
+  # ⚠️ **dsh 而家係 Router 嘅子進程，唔再係獨立 service。**
+  # 之前試過 HTTP API，但 dsh 個 web 有 process-scoped 認證
+  # （launchToken 每條 process 隨機、cookie 綁 in-memory peer、
+  #  Config 冇開關可以關），要每次重啟刮 log —— 太脆。
+  # 改用 SDK（stdio JSON-RPC），Router 直接 spawn 佢。
+  #
+  # 所以 `dsh/` 個 image 變咗 Router 個 image 嘅一部分 ——
+  # 見 repo 根 Dockerfile。
   router:
     build: .
     container_name: router
@@ -84,18 +70,25 @@ services:
     environment:
       - TZ=${TZ:-Asia/Hong_Kong}
       - PYTHONIOENCODING=utf-8
-      # ⚠️ 見檔頭。容器入面 127.0.0.1 係自己，一定要改做 service name。
-      - FW_HERMES_URL=http://hermes:8642
+      # pi-ai 個 openrouter provider 用呢條讀金鑰。
+      - OPENROUTER_API_KEY=${FW_OPENROUTER_API_KEY}
+      # dsh SDK profile 嘅家（session、attachments）。
+      - DSH_HOME=/opt/dsh
+      # 人設來源 —— entrypoint 由呢度讀入 persona。
+      - DSH_SOUL=/opt/dsh-src/profile/SOUL.md
 
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      # 影片：Router 寫入呢度，Hermes 由自己個 /opt/data/cache/videos 讀返。
-      # （Hermes 掛 ./hermes/data → /opt/data，所以路徑對得上。）
+      # dsh profile 設定（cordis.patch.yml、package.json、entrypoint）。
+      - ./dsh/profile:/opt/dsh-src/profile
+      # dsh 嘅執行期狀態（session 紀錄）。唔入版控。
+      - ./dsh/data:/opt/dsh
+      # 人設：仍然係 `hermes/data/SOUL.md`（已追蹤）。
+      # ⚠️ 路徑要對返 entrypoint 嘅 `DSH_SOUL` 預設值。
+      - ./hermes/data/SOUL.md:/opt/dsh-src/SOUL.md:ro
+      # 影片：Router 寫入呢度（`router/videos.py` 仲用緊呢個路徑）。
       - ./hermes/data/cache/videos:/app/hermes/data/cache/videos
-
-    depends_on:
-      - hermes
 
     logging:
       driver: json-file

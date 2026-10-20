@@ -165,17 +165,29 @@ class Settings(BaseSettings):
     # 就會洗版。純記憶體，重啟歸零。
     maintenance_notice_cooldown_seconds: int = 600
 
-    # ── Router（大肥鯨外殼 + Hermes 腦）──────────────────
-    # 設計見 hermes/ARCHITECTURE.md。
+    # ── Router（大肥鯨外殼 + DeepSeek Harness 腦）────────
+    # dsh 嘅協議見 `router/dsh.py` 檔頭；架構背景見
+    # hermes/ARCHITECTURE.md（嗰份主要寫 Hermes 年代）。
     #
-    # Router 唔再自己打 OpenRouter，而係將對話交去 Hermes 嘅 API server，
-    # 用 conversation 參數指定「邊一條引用串」。所以金鑰要嘅係 Hermes
-    # 自己生嗰條 API_SERVER_KEY，唔係 OpenRouter key。
+    # ⚠️ **用 stdio SDK，唔係 HTTP。** dsh 個 web HTTP API 有 process-scoped
+    # 認證：launchToken 每條 process 隨機生成、cookie 綁 in-memory peer，
+    # 而且 `Config` 冇任何開關可以關掉（2026-10-20 讀源碼確認）。
+    # SDK profile 冇呢個問題 —— 信任邊界就係 process 本身。
     #
-    # ⚠️ 呢條 key 由 Hermes 生成，寫喺 Hermes 嗰邊嘅 data/.env，
-    # 唔喺呢個 repo。唔好喺 .env 寫兩次同名 key —— 邊條生效係睇實作。
-    hermes_url: str = "http://127.0.0.1:8642"
-    hermes_key: str = ""
+    # Router 跑喺容器、dsh 都跑喺容器，所以呢度直接叫 **entrypoint**，
+    # 唔係 `dsh` binary —— entrypoint 負責把 SOUL.md 砌入 persona
+    # （`dsh/data` 係 bind mount，會蓋走 build 時嘅 profile，每次開機要重砌）。
+    dsh_command: str = "/usr/local/bin/dsh-entrypoint"
+    # 一輪等幾久。dsh 會做壓縮、可能重試，同 Hermes 年代一樣畀 180 秒。
+    dsh_timeout_seconds: float = 180.0
+    # 起 process 要載入成個 Cordis plugin tree。
+    dsh_startup_timeout_seconds: float = 90.0
+
+    # ⚠️ 下面兩個係 Hermes 年代留落嘅，**而家冇 caller**（dsh 收 base64
+    # 圖片，唔收檔案路徑）。留住係因為 `router/videos.py` 仲寫緊嗰個目錄，
+    # 他日要將影片送得入 dsh 會再用到。
+    hermes_media_dir: Path = Path("hermes/data/cache/videos")
+    hermes_media_prefix: str = "/opt/data/cache/videos"
 
     # 影片轉發用。Hermes 嘅 `video_analyze` 要一個**佢讀得到嘅路徑**，
     # 唔收 data URL（`input_file` 會 400），所以 Router 要落一個檔。

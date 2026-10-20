@@ -1,6 +1,6 @@
 """Router 上線前自我檢查。
 
-唔連 Telegram、唔叫模型（除咗最後一項會真係問 Hermes 一句）——
+唔連 Telegram、唔叫模型（除咗最後一項會真係問 dsh 一句）——
 同 `scripts/smoke.py` 同一個精神。
 
 跑法（由 repo 根）：
@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dafeijing.router.app import build_application  # noqa: E402
-from dafeijing.router.hermes import HermesClient, HermesError  # noqa: E402
+from dafeijing.router.dsh import DshClient, DshError  # noqa: E402
 from dafeijing.router.services import create_services  # noqa: E402
 from dafeijing.settings import Settings  # noqa: E402
 
@@ -41,9 +41,8 @@ def main() -> int:
         return 1
     check("讀取 .env", True)
     check("FW_TELEGRAM_BOT_TOKEN 已填", bool(cfg.telegram_bot_token))
-    check("FW_HERMES_KEY 已填", bool(cfg.hermes_key))
     check("FW_ADMIN_USER_IDS 已填", bool(cfg.admin_ids))
-    print(f"    Hermes：{cfg.hermes_url}")
+    print(f"    dsh：{cfg.dsh_command}")
     print(f"    資料庫：{cfg.db_path}")
 
     print("\n[資料庫]")
@@ -57,7 +56,7 @@ def main() -> int:
             names = {row["name"] for row in tables}
             check("group_cache 存在", "group_cache" in names)
             check("users 存在", "users" in names)
-            await svc.hermes.close()
+            await svc.brain.close()
             return True
         finally:
             await svc.db.close()
@@ -96,25 +95,31 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         check("建立 Application", False, str(exc).splitlines()[0])
 
-    print("\n[Hermes]")
-    if not cfg.hermes_key:
-        check("連 Hermes", False, "冇 FW_HERMES_KEY")
-    else:
-        async def ping() -> None:
-            client = HermesClient(cfg.hermes_url, cfg.hermes_key)
-            try:
-                reply = await client.ask("router-smoke", "答一個字：好")
-                check("連 Hermes", True, f"回「{reply.text[:20]}」")
-                print(f"    tokens：{reply.input_tokens} in / {reply.output_tokens} out")
-            except HermesError as exc:
-                check("連 Hermes", False, str(exc)[:120])
-            finally:
-                await client.close()
+    print("\n[dsh]")
+    check("FW_DSH_COMMAND 已填", bool(cfg.dsh_command), cfg.dsh_command)
 
+    async def ping() -> None:
+        client = DshClient(
+            cfg.dsh_command.split(),
+            timeout=cfg.dsh_timeout_seconds,
+            startup_timeout=cfg.dsh_startup_timeout_seconds,
+        )
         try:
-            asyncio.run(ping())
+            await client.start()
+            reply = await client.ask("router-smoke", "答一個字：好")
+            check("連 dsh", True, f"回「{reply.text[:20]}」")
+            print(f"    tokens：{reply.input_tokens} in / {reply.output_tokens} out")
+        except DshError as exc:
+            check("連 dsh", False, str(exc)[:120])
         except Exception as exc:  # noqa: BLE001
-            check("連 Hermes", False, str(exc).splitlines()[0])
+            check("連 dsh", False, str(exc).splitlines()[0])
+        finally:
+            await client.close()
+
+    try:
+        asyncio.run(ping())
+    except Exception as exc:  # noqa: BLE001
+        check("連 dsh", False, str(exc).splitlines()[0])
 
     print()
     if failures:

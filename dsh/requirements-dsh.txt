@@ -1,0 +1,7 @@
+# entrypoint 砌 persona 用。
+#
+# 為什麼唔用 apt 嘅 `python3-yaml`：python:3.12-slim 有個
+# `/usr/local/bin/python3`（3.12）蓋過系統 `/usr/bin/python3`（3.13），
+# 而 apt 嗰個包裝落系統嗰邊，`import yaml` 會 ModuleNotFoundError。
+# 用 pip 裝落 image 自己個 Python 就冇呢個問題。
+PyYAML>=6.0,<7

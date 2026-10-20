@@ -1,0 +1,136 @@
+# 大肥鯨 —— dsh profile 嘅用戶 patch 層。
+#
+# 呢個 profile 用 **SDK（stdio JSON-RPC）**，唔係 web —— 原因見
+# `dafeijing/router/dsh.py` 檔頭（web 有 process-scoped 認證，關唔到）。
+#
+# 呢層喺所有 bundle（base → sdk-app）之後套用，所以可以直接改佢哋嘅 row。
+# 格式：top-level YAML 陣列，每項係一個 loader patch entry。
+#
+# ⚠️ `personaPrefix` 由 entrypoint 由 SOUL.md 砌入（見 dsh/entrypoint.sh）。
+#    佢會覆蓋 `system-prompt` 嗰 row 嘅 config，所以喺度寫都冇用。
+#
+# ⚠️ sdk-app bundle 會將 system-prompt 改成 `personaPrefix`（唔係 `persona`），
+#    所以 entrypoint 要寫 `personaPrefix`。
+
+# ── 模型：OpenRouter ───────────────────────────────────────
+# pi-ai 內建 `openrouter` provider，baseURL 已經係 openrouter.ai/api/v1。
+# 金鑰由 OPENROUTER_API_KEY 讀，唔會入 config。
+#
+# ⚠️ `reasoning: high` —— 呢個係「開返思考」。Hermes 版原本係關嘅。
+#    可選值：off | high | max。`high` 已經有思考，唔使去 max。
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+        reasoning: high
+        # Route 已由 pi-ai catalog 描述，但呼叫時仍然要明示 `api` ——
+        # 佢個模型 id（`deepseek/deepseek-v4.1-flash-1017`）唔喺 catalog 入面。
+        # `baseURL` 一齊寫死，唔好靠 catalog 繼承（`models` 列表會取代 catalog）。
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        models:
+          # 只列一個 —— pi-ai 嘅 catalog 冇 1017 呢個版本，所以要手動宣告。
+          # contextWindow 同 maxTokens 係實測值（OpenRouter /models 查）。
+          - id: deepseek/deepseek-v4.1-flash-1017
+            name: DeepSeek V4.1 Flash 1017
+            contextWindow: 1048576
+            maxTokens: 32768
+
+# agent 起嘅時候用邊個 provider/model。
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash-1017
+
+# ── 剝走工具 ───────────────────────────────────────────────
+# web-app bundle 已經 disable 咗大部分；呢度補刀仲喺 base 嗰啲。
+#
+# ⚠️ **隻 bot 係角色扮演，唔應該有 shell、檔案讀寫、網頁抓取。**
+# 呢啲唔止多餘，係攻擊面 —— 群組任何一句話都可以驅動佢改硬盤上嘅檔案。
+#
+# 唔剝走嘅話，dsh 會當佢係 coding agent，system prompt 亦會教佢用工具。
+- id: tool-bash
+  disabled: true
+- id: tool-tasks
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: tool-str-replace-editor
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: skill-local
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-web
+  disabled: true
+- id: web
+  disabled: true
+- id: web-search-deepseek
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: workflow-workerthread
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: goal
+  disabled: true
+- id: goal-session
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: workspace-context
+  disabled: true
+
+# ⚠️ **只剷工具，唔好剷服務。**
+#
+# 之前試過 `sandbox` / `fs-sandbox` / `approval` / `permission` 全部 disable，
+# 結果 `sdk-jsonrpc-server`（required）等唔到 `workingDirectory`，
+# 而 `workingDirectory` 等唔到 `fs` —— 成個 profile 起唔到。
+#
+# 正確做法：服務照起（佢哋唔會主動做嘢），但模型見唔到任何工具，
+# 所以根本冇嘢可以驅動佢哋。
+#
+# `sandbox-policy` 保留 —— `fs` 同 `terminal-controller` 都依賴佢。
+- id: bash-env
+  disabled: true
+
+# ── 審批 / 提問橋 ────────────────────────────────────────
+# 冇工具就冇嘢要審批。ask_user_question 亦唔要 —— 佢會等 600 秒。
+- id: user-interaction
+  disabled: true
+
+# ── 標題生成 ─────────────────────────────────────────────
+# 每次開新 session 多一次模型呼叫，純粹係 Web UI 用。Router 唔睇標題。
+# （確定性 fallback 標題仍然會寫，只係唔叫模型。）
+- id: session-title-llm
+  disabled: true
+
+# ── 遙測 ─────────────────────────────────────────────────
+# 官方預設會送 OTLP 出街。唔要。
+- id: telemetry-otel
+  disabled: true
+
+# ── 壓縮 ─────────────────────────────────────────────────
+# **compact-basic 保留** —— 長對話要壓縮，否則爆 context。
+# 但 tool-result-prune 唔要：冇工具結果好剪。
+- id: tool-result-prune
+  disabled: true
