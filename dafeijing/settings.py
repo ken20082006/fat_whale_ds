@@ -183,23 +183,17 @@ class Settings(BaseSettings):
     # 起 process 要載入成個 Cordis plugin tree。
     dsh_startup_timeout_seconds: float = 90.0
 
-    # ⚠️ 下面兩個係 Hermes 年代留落嘅，**而家冇 caller**（dsh 收 base64
-    # 圖片，唔收檔案路徑）。留住係因為 `router/videos.py` 仲寫緊嗰個目錄，
-    # 他日要將影片送得入 dsh 會再用到。
-    hermes_media_dir: Path = Path("hermes/data/cache/videos")
-    hermes_media_prefix: str = "/opt/data/cache/videos"
-
-    # 影片轉發用。Hermes 嘅 `video_analyze` 要一個**佢讀得到嘅路徑**，
-    # 唔收 data URL（`input_file` 會 400），所以 Router 要落一個檔。
+    # 影片轉發用。dsh 嘅 `video_analyze` 要一個**佢讀得到嘅路徑**，
+    # 唔收 data URL。
     #
-    # Router 跑喺主機、Hermes 跑喺容器，同一個檔有兩個路徑：
-    #   hermes_media_dir      —— 主機寫入（相對於 fat_whale_ds 嘅 CWD）
-    #   hermes_media_prefix   —— 容器讀取（喺提示度話畀模型知）
+    # Router 寫落 `data/videos`，compose 掛 `./data:/app/data`，
+    # 所以同一條檔喺容器入面係 `/app/data/videos/...`。
+    # 送畀模型嘅提示會用 `hermes_media_prefix` 嗰條。
     #
-    # 預設值啱啱好：hermes 掛咗 `./data:/opt/data`，所以喺 data 底下
-    # 寫就兩邊都見到。改咗 Hermes 嘅掛載就要跟住改。
-    hermes_media_dir: Path = Path("hermes/data/cache/videos")
-    hermes_media_prefix: str = "/opt/data/cache/videos"
+    # ⚠️ 欄位名仲叫 `hermes_*` —— 純粹歷史遺留（Hermes 年代命名），
+    # 實際用嘅係 dsh。改名要連 env 同測試一齊動，暫時唔值。
+    hermes_media_dir: Path = Path("data/videos")
+    hermes_media_prefix: str = "/app/data/videos"
 
     # 成本估算（美元／百萬 token）。
     #

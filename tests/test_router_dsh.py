@@ -59,13 +59,13 @@ def test_empty_text_is_dropped():
 def test_image_data_url_becomes_an_image_block():
     assert build_content("呢張", ["data:image/jpeg;base64,QUJD"]) == [
         {"type": "text", "text": "呢張"},
-        {"type": "image", "mediaType": "image/jpeg", "data": "QUJD"},
+        {"type": "image", "mimeType": "image/jpeg", "data": "QUJD"},
     ]
 
 
 def test_image_only_is_allowed():
     assert build_content("", ["data:image/png;base64,QUJD"]) == [
-        {"type": "image", "mediaType": "image/png", "data": "QUJD"}
+        {"type": "image", "mimeType": "image/png", "data": "QUJD"}
     ]
 
 
@@ -151,17 +151,20 @@ FAKE_DSH = textwrap.dedent(
         method = frame.get("method")
         rpc_id = frame.get("id")
 
-        if method == "initialize":
+        if method == "session/resume":
+            # 假 process 當「全部 id 都存在」—— 真 dsh 對陌生 id 會拒絕。
+            send({"jsonrpc": "2.0", "id": rpc_id, "result": {}})
+        elif method == "initialize":
             send({"jsonrpc": "2.0", "id": rpc_id, "result": {"serverInfo": {"name": "fake"}}})
         elif method == "session/prompt":
             sid = frame["params"]["sessionId"]
             send({"jsonrpc": "2.0", "id": rpc_id, "result": {"messageId": "m1"}})
-            send({"jsonrpc": "2.0", "method": "session/event",
+            send({"jsonrpc": "2.0", "method": "session.event",
                   "params": {"sessionId": sid, "event": {
                       "type": "assistant/message",
                       "data": {"message": {"content": [{"type": "text", "text": "你好呀"}]},
                                "usage": {"inputTokens": 100, "outputTokens": 5}}}}})
-            send({"jsonrpc": "2.0", "method": "session/event",
+            send({"jsonrpc": "2.0", "method": "session.event",
                   "params": {"sessionId": sid, "event": {
                       "type": "turn/end", "data": {"turn": 1, "reason": {"kind": "completed"}}}}})
         elif method == "shutdown":
@@ -292,7 +295,7 @@ def test_turn_error_from_event(fake_dsh):
                     sid = frame["params"]["sessionId"]
                     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": frame["id"],
                                                  "result": {"messageId": "m"}}) + "\\n")
-                    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session/event",
+                    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session.event",
                         "params": {"sessionId": sid, "event": {"type": "turn/end",
                         "data": {"reason": {"kind": "error",
                         "error": {"code": "model-unavailable", "message": "冇模型"}}}}}}) + "\\n")
@@ -331,7 +334,7 @@ def test_empty_answer_is_an_error(tmp_path: Path):
                                                  "result": {}}) + "\\n")
                     if m == "session/prompt":
                         sid = frame["params"]["sessionId"]
-                        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session/event",
+                        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session.event",
                             "params": {"sessionId": sid, "event": {"type": "turn/end",
                             "data": {"reason": {"kind": "completed"}}}}}) + "\\n")
                 elif m == "shutdown":
@@ -371,3 +374,61 @@ def test_concurrent_turn_on_same_session_is_refused(fake_dsh):
             await client.close()
 
     asyncio.run(scenario())
+
+
+def test_a_reply_longer_than_the_default_stream_limit_still_works(tmp_path: Path):
+    """回歸測試：asyncio 預設每行 64 KiB，長回覆會爆。
+
+    症狀係 `Separator is found, but chunk is longer than limit`，
+    成條 stdout read loop 死，之後所有回覆都收唔到。
+    （2026-10-20 真機撞到。）
+    """
+    script = tmp_path / "long.py"
+    script.write_text(
+        textwrap.dedent(
+            '''
+            import json, sys
+            BIG = "字" * 40000  # UTF-8 下約 120 KB，遠超 64 KiB
+            for line in sys.stdin:
+                frame = json.loads(line)
+                m = frame.get("method")
+                if m in ("initialize", "session/resume"):
+                    out = {"jsonrpc": "2.0", "id": frame["id"], "result": {}}
+                elif m == "session/prompt":
+                    sid = frame["params"]["sessionId"]
+                    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": frame["id"],
+                                                 "result": {"messageId": "m"}}) + "\n")
+                    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session.event",
+                        "params": {"sessionId": sid, "event": {
+                            "type": "assistant/message",
+                            "data": {"message": {"content": [
+                                {"type": "text", "text": BIG}]}}}}}, ensure_ascii=False) + "\n")
+                    out = {"jsonrpc": "2.0", "id": frame["id"], "result": {}}
+                elif m == "shutdown":
+                    out = {"jsonrpc": "2.0", "id": frame["id"], "result": {}}
+                else:
+                    continue
+                sys.stdout.write(json.dumps(out) + "\n")
+                sys.stdout.flush()
+                if m == "shutdown":
+                    break
+                if m == "session/prompt":
+                    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session.event",
+                        "params": {"sessionId": frame["params"]["sessionId"], "event": {
+                            "type": "turn/end", "data": {"reason": {"kind": "completed"}}}}}) + "\n")
+                    sys.stdout.flush()
+            '''
+        ),
+        encoding="utf-8",
+    )
+    client = DshClient([sys.executable, "-u", str(script)], cwd=str(tmp_path), timeout=20)
+
+    async def scenario() -> Reply:
+        try:
+            await client.start()
+            return await client.ask("dm:1", "hi")
+        finally:
+            await client.close()
+
+    reply = asyncio.run(scenario())
+    assert len(reply.text) > 64 * 1024

@@ -3,3 +3,16 @@ packages:
 
 nodeLinker: hoisted
 autoInstallPeers: false
+
+# ⚠️ pnpm 12 預設**唔准**依賴跑 build script（安全措施）。
+#
+# `sharp`（dsh-browser-tool 用嚟縮放截圖）要跑 install script 揀對應
+# 平台嘅預編譯 binary。唔放行就 `ERR_PNPM_IGNORED_BUILDS`，build 直接失敗。
+#
+# ⚠️ **key 係 `allowBuilds`（map），唔係舊版嘅 `onlyBuiltDependencies`（list）。**
+# pnpm 12 會靜靜忽略舊 key，之後照樣報錯。呢個係 `pnpm approve-builds --all`
+# 自己寫出嚟嘅格式（2026-10-20 實測）。
+#
+# 只放行真正需要嘅，唔好開 `dangerouslyAllowAllBuilds`。
+allowBuilds:
+  sharp: true

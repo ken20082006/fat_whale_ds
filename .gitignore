@@ -14,7 +14,7 @@ config/persona.md
 assets/
 
 # 執行期資料
-# `/data/` 要錨定喺根 —— 唔錨定嘅話會連 `hermes/data/` 都食埋，
+# `/data/` 要錨定喺根 —— 唔錨定嘅話會連子目錄嘅 data/ 都食埋，
 # 而嗰度有 SOUL.md 同 config.yaml 要入版控。
 /data/
 logs/
@@ -27,39 +27,12 @@ backups/
 .idea/
 .vscode/
 .DS_Store
-# ── hermes/（Hermes Agent 嘅家）──────────────────────
-#
-# **只追兩個設定檔**：SOUL.md（人設）同 config.yaml（模型、工具、思考開關）。
-# 其餘一律唔追 —— Hermes 個 data/ 有大量執行期狀態（sessions、memories、
-# skills、cache、.local/、locks、backups…），入版控只會製造噪音同衝突。
-#
-# 兩部電腦靠 git 同步人設同設定，靠呢兩個檔就夠。
-hermes/data/*
-!hermes/data/SOUL.md
-!hermes/data/config.yaml
-
-hermes/__pycache__/
-
-# ── belfast/（貝爾法斯特嘅 Hermes 家）────────────────
-#
-# 同 hermes/ 一樣嘅取捨：**只追人設同設定兩個檔**。其餘係執行期狀態。
-#
-# 注意同 hermes 一樣要用 `data/*` 而唔係 `data/` —— 後者會連目錄都
-# ignore 埋，git 唔會行入去，下面兩個 negation 就冇效。
-#
-# `belfast/persona.md`、`build_soul.py`、`docker-compose.yml`、`README.md`
-# 唔使特別寫：上面冇任何 pattern 食到佢哋。
-belfast/data/*
-!belfast/data/SOUL.md
-!belfast/data/config.yaml
-
-belfast/__pycache__/
-
 # ── dsh/（DeepSeek Harness 嘅家）──────────────────────
 #
-# 同 hermes/ 一樣：**只追設定**。`dsh/data/` 係 profile 嘅執行期狀態
-# （sessions、attachments、pnpm 嘅 node_modules…），入版控只會製造噪音。
+# `dsh/data/` 係執行期狀態（sessions、attachments、node_modules…），
+# 入版控只會製造噪音。
 #
-# 人設唔喺呢度 —— SOUL.md 仍然喺 `hermes/data/SOUL.md`（已追蹤），
-# compose 掛去 dsh 再由 entrypoint 砌入 persona。
+# 人設喺 `dsh/persona/SOUL.md`（已追蹤，由 build_soul.py 由
+# config/persona.md 生成）。舊 `hermes/`、`belfast/` 已搬去
+# `C:\ds\_archive\20261021\`。
 dsh/data/

@@ -6,37 +6,88 @@
 # 呢層喺所有 bundle（base → sdk-app）之後套用，所以可以直接改佢哋嘅 row。
 # 格式：top-level YAML 陣列，每項係一個 loader patch entry。
 #
-# ⚠️ `personaPrefix` 由 entrypoint 由 SOUL.md 砌入（見 dsh/entrypoint.sh）。
-#    佢會覆蓋 `system-prompt` 嗰 row 嘅 config，所以喺度寫都冇用。
+# ⚠️ **row 名一定要對返 `@deepseek-ai/dsh-base@0.2.1-rc.2`。**
+# 2026-10-20 第一次寫嗰版有六個 row 名根本唔存在（`tool-tasks`、
+# `tool-str-replace-editor`、`tool-ralph`、`workspace-context`、
+# `user-interaction`、`skill-local`）—— dsh 對未知 id 嘅 patch 係靜默略過，
+# 所以冇報錯但工具一條都冇剷走。改之前先 dump base 個 cordis.patch.yml 核對。
 #
-# ⚠️ sdk-app bundle 會將 system-prompt 改成 `personaPrefix`（唔係 `persona`），
-#    所以 entrypoint 要寫 `personaPrefix`。
+# ⚠️ `personaPrefix` 由 entrypoint 由 SOUL.md 砌入（見 dsh/entrypoint.sh）。
+# 呢度寫嘅係 `personaSuffix` —— entrypoint 只換 prefix，唔會掂 suffix。
+#
+# 為什麼要呢段：模型原本**唔知道自己睇得到截圖**。2026-10-20 佢開咗
+# 一條 X link，思考原文寫「maybe I can open the image in browser and take
+# a screenshot; but I can't perceive images ... Risky」，然後放棄。
+# 其實 browser 工具嘅截圖係以圖片 block 回傳，佢真係睇得到
+# （同日實測：開 pbs.twimg.com 嘅圖再截圖，佢描述得完全準確）。
+#
+# 呢個係**行為引導**，唔係硬規則 —— 交返模型自己判斷幾時用。
+- id: system-prompt
+  config:
+    personaSuffix: |
+      ## 你自己要知道嘅嘢
+
+      - **browser 嘅截圖，你真係睇得到**（係圖片，唔係文字描述）。
+      - `web_fetch` 只抽文字。佢回 `unsupported content type "image/..."`
+        **唔係死路** —— 改用 `browser` 開同一條 URL 截圖。
+      - 有人畀網址，預設就係要你睇嗰一頁；登入牆（X/IG）就用鏡像攞圖 URL。
+      - 問路、搵地方、營業時間、電話、評分 → 用 `mcp__google_maps__*`
+        （`maps_place_search` → `maps_place_details`；路線用 `maps_directions`）。
+      - 用完 browser 記得 `close` + `kill:true`。
+
+
 
 # ── 模型：OpenRouter ───────────────────────────────────────
-# pi-ai 內建 `openrouter` provider，baseURL 已經係 openrouter.ai/api/v1。
-# 金鑰由 OPENROUTER_API_KEY 讀，唔會入 config。
-#
-# ⚠️ `reasoning: high` —— 呢個係「開返思考」。Hermes 版原本係關嘅。
-#    可選值：off | high | max。`high` 已經有思考，唔使去 max。
+# ⚠️ `id` 一定要係 `llm-pi-ai` —— 呢個係 base 嘅 row id，
+#    唔係包名，亦唔使重複寫 `name`（patch 會 merge 落原 row）。
 - id: llm-pi-ai
-  name: '@deepseek-ai/dsh-llm-pi-ai'
   config:
     providers:
       openrouter:
         apiKeyEnv: OPENROUTER_API_KEY
+        # 開返思考。Hermes 版原本係關嘅。
+        # 可選值：off | high | max。
         reasoning: high
-        # Route 已由 pi-ai catalog 描述，但呼叫時仍然要明示 `api` ——
-        # 佢個模型 id（`deepseek/deepseek-v4.1-flash-1017`）唔喺 catalog 入面。
-        # `baseURL` 一齊寫死，唔好靠 catalog 繼承（`models` 列表會取代 catalog）。
+        # 1017 呢個 id 唔喺 pi-ai catalog，所以要明示 wire protocol 同端點。
         api: openai-completions
         baseURL: https://openrouter.ai/api/v1
         models:
-          # 只列一個 —— pi-ai 嘅 catalog 冇 1017 呢個版本，所以要手動宣告。
-          # contextWindow 同 maxTokens 係實測值（OpenRouter /models 查）。
           - id: deepseek/deepseek-v4.1-flash-1017
             name: DeepSeek V4.1 Flash 1017
             contextWindow: 1048576
             maxTokens: 32768
+            # ⚠️ **一定要寫 `input`，否則 dsh 當佢純文字。**
+            # 手動宣告嘅 model 冇 catalog 做底，`input` 會 fallback 去
+            # route 嘅 `defaultInput`（= 只有 text）。結果圖片照樣存落
+            # attachment store，但送去模型時被換成
+            # 「image omitted because text-only model」——
+            # 外表冇報錯，模型只係話「我睇唔到」。
+            # （2026-10-20 真機撞到。）
+            #
+            # ⚠️ pi-ai 個 README 講「configurable entry fields 只有
+            # id / name / contextWindow / maxTokens / reasoningEfforts /
+            # compat」，**呢句係漏咗 `input`** —— 要睇源碼
+            # `lib/index.js` 嘅 `declaredInput(entry.input)` 才知。
+            input:
+              - text
+              - image
+            # ⚠️ **手動宣告嘅 model 一定要寫 `reasoningEfforts`。**
+            # pi-ai 對「唔喺 catalog 入面」嘅 model 當佢**唔支援任何思考**，
+            # 而 route 上面寫咗 `reasoning: high` 就會撞：
+            #   UNSUPPORTED_REASONING_EFFORT
+            # 呢個令 2026-10-20 第一次真機測試完全失敗（Router 等 180 秒）。
+            #
+            # key = 可選等級，value = 送上 wire 嘅拼法。
+            # `off` 留空值 = 揀 off 時乜都唔送。
+            # ⚠️ **唔好宣告 `off`。**
+            # 呢個 schema 唔收空字串，而 YAML 裸寫 `off` 會變布林 `false`。
+            # 我哋要嘅係「一直開思考」，所以只宣告 high / max 就夠。
+            #
+            # （2026-10-20 連撞三次：冇宣告 → UNSUPPORTED_REASONING_EFFORT；
+            #   `off:` 空值 → key 變 "false"；`off: ""` → 唔收空字串。）
+            reasoningEfforts:
+              high: high
+              max: max
 
 # agent 起嘅時候用邊個 provider/model。
 - id: agent-default-model
@@ -45,26 +96,39 @@
     model: deepseek/deepseek-v4.1-flash-1017
 
 # ── 剝走工具 ───────────────────────────────────────────────
-# web-app bundle 已經 disable 咗大部分；呢度補刀仲喺 base 嗰啲。
-#
-# ⚠️ **隻 bot 係角色扮演，唔應該有 shell、檔案讀寫、網頁抓取。**
+# 隻 bot 係角色扮演，**唔應該有 shell、檔案讀寫、網頁抓取**。
 # 呢啲唔止多餘，係攻擊面 —— 群組任何一句話都可以驅動佢改硬盤上嘅檔案。
 #
-# 唔剝走嘅話，dsh 會當佢係 coding agent，system prompt 亦會教佢用工具。
+# ⚠️ **只剷 model-facing 嘅工具 row，唔好剷服務 row。**
+# 2026-10-20 試過連 `sandbox` / `fs-sandbox` / `approval` / `permission`
+# 一齊 disable，結果 `sdk-jsonrpc-server`（required）等唔到
+# `workingDirectory`、`workingDirectory` 等唔到 `fs`，成個 profile 起唔到。
+
+# shell
 - id: tool-bash
   disabled: true
-- id: tool-tasks
+- id: tool-pwsh
   disabled: true
+
+# 檔案
 - id: tool-fs
   disabled: true
 - id: tool-fs-search
   disabled: true
-- id: tool-str-replace-editor
+
+# 工作目錄（`working_directory` 工具；個 service 保留，唔好剷）
+- id: tool-working-directory
   disabled: true
+
+# 背景任務（`job_*` 工具；`jobs` service 保留）
+- id: tool-jobs
+  disabled: true
+
+# 技能
 - id: tool-skill
   disabled: true
-- id: skill-local
-  disabled: true
+
+# 子代理
 - id: tool-subagent
   disabled: true
 - id: tool-subagent-fork
@@ -73,64 +137,90 @@
   disabled: true
 - id: tool-subagent-list-agents
   disabled: true
-- id: tool-web
-  disabled: true
+
+# ── 影片理解（dsh-video-lens）────────────────────────────
+# DeepSeek v4.1 睇唔到片，所以交畀另一個 vision model 睇「抽出嚟嘅 frame」。
+#
+# 做法：ffmpeg 用 `scdet` 偵測鏡頭切換 → 每個鏡頭抽一張代表 frame →
+# 送去一個 OpenAI-compatible vision endpoint。**所以唔需要 model route，
+# 亦唔需要換主模型** —— 呢個 plugin 自己有一套 vision 設定。
+#
+# ⚠️ 用 `xiaomi/mimo-v2.6-flash`：大肥鯨年代嘅 GIF／影片外援就係佢
+# （`FW_GIF_DELEGATE_MODEL`），實測睇得到 image_url。
+#
+# ASR（語音轉文字）唔開 —— 我哋冇 ASR endpoint。Plugin 嘅設計係
+# 「ASR 嚴格附加」，冇 key 就 transcript = null，視覺分析照跑。
+- id: video-lens
+  name: dsh-video-lens
+  config:
+    visionBaseUrl: https://openrouter.ai/api/v1
+    visionModel: xiaomi/mimo-v2.6-flash
+    visionApiKeyEnv: OPENROUTER_API_KEY
+    # 抽幾多張 frame。預設 12，短片會自動密啲。
+    maxFrames: 12
+    frameMaxWidth: 768
+
+# ── 網頁
+#
+# ⚠️ 原本我將 `web` 成個剷走，結果模型連搜尋能力都冇 ——
+# 問「最新 iPhone」只可以答「我資料有限期」。2026-10-20 用家指出
+# 「Windows 版 dsh 用 OpenRouter 都開得到 web search」，查實係啱：
+# 有現成 plugin `dsh-web-search-openrouter`，用 OpenRouter 嘅
+# `/v1/responses` 原生 `web_search` server tool —— 同 Hermes 年代
+# 用嘅係同一套機制，唔使額外 key。
+#
+# 所以 `web` 服務同 `tool-web` 都要開返；剷走嘅係其餘兩個
+# DeepSeek 專用 provider（要 DEEPSEEK_API_KEY，我哋冇）。
+
 - id: web
-  disabled: true
+  config:
+    # ⚠️ **provider id 係 `openai-responses`，唔係 `openrouter`。**
+    # plugin 源碼寫死咗（`lib/index.js:91`）：`id: 'openai-responses'`。
+    # 寫錯嘅話搜尋會回：
+    #   configured web provider "..." is not registered
+    #   code: WEB_PROVIDER_CONFIGURED_MISSING
+    # —— 而且模型會以為「搜尋工具用唔到」，改用記憶答。
+    # （2026-10-20 真機撞到。）
+    searchProvider: openai-responses
+    fetchProvider: http
+
+# DeepSeek 官方嘅搜尋／抓取 provider —— 要 DEEPSEEK_API_KEY，唔用。
 - id: web-search-deepseek
   disabled: true
+- id: web-deepseek-api
+  disabled: true
+
+- insert:
+    - id: web-search-openrouter
+      name: 'dsh-web-search-openrouter'
+      config:
+        enabled: true
+        # OpenRouter 嘅 Responses 端點（唔係 /chat/completions）。
+        baseURL: https://openrouter.ai/api/v1
+        model: deepseek/deepseek-v4.1-flash-1017
+        apiKeyEnv: OPENROUTER_API_KEY
+
+# 其他
 - id: tool-todo
   disabled: true
 - id: tool-goal
   disabled: true
-- id: tool-ralph
-  disabled: true
 - id: tool-workflow
-  disabled: true
-- id: workflow-workerthread
   disabled: true
 - id: plan-mode
   disabled: true
-- id: goal
-  disabled: true
-- id: goal-session
-  disabled: true
 - id: command-goal
   disabled: true
-- id: workspace-context
-  disabled: true
 
-# ⚠️ **只剷工具，唔好剷服務。**
-#
-# 之前試過 `sandbox` / `fs-sandbox` / `approval` / `permission` 全部 disable，
-# 結果 `sdk-jsonrpc-server`（required）等唔到 `workingDirectory`，
-# 而 `workingDirectory` 等唔到 `fs` —— 成個 profile 起唔到。
-#
-# 正確做法：服務照起（佢哋唔會主動做嘢），但模型見唔到任何工具，
-# 所以根本冇嘢可以驅動佢哋。
-#
-# `sandbox-policy` 保留 —— `fs` 同 `terminal-controller` 都依賴佢。
-- id: bash-env
-  disabled: true
-
-# ── 審批 / 提問橋 ────────────────────────────────────────
-# 冇工具就冇嘢要審批。ask_user_question 亦唔要 —— 佢會等 600 秒。
-- id: user-interaction
-  disabled: true
-
-# ── 標題生成 ─────────────────────────────────────────────
-# 每次開新 session 多一次模型呼叫，純粹係 Web UI 用。Router 唔睇標題。
-# （確定性 fallback 標題仍然會寫，只係唔叫模型。）
+# ── 冇用嘅副作用 ──────────────────────────────────────────
+# 每次開新 session 多一次模型呼叫，純粹係 UI 標題。Router 唔睇。
 - id: session-title-llm
   disabled: true
 
-# ── 遙測 ─────────────────────────────────────────────────
-# 官方預設會送 OTLP 出街。唔要。
-- id: telemetry-otel
+# 遙測會送 OTLP 出街。
+- id: session-telemetry-otel
   disabled: true
 
-# ── 壓縮 ─────────────────────────────────────────────────
-# **compact-basic 保留** —— 長對話要壓縮，否則爆 context。
-# 但 tool-result-prune 唔要：冇工具結果好剪。
-- id: tool-result-prune
+# 冇工具結果好剪。
+- id: tool-result-pruner
   disabled: true

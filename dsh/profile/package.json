@@ -1,12 +1,18 @@
 {
   "name": "dsh-profile-fatwhale-sdk",
   "private": true,
-  "dependencies": {},
+  "dependencies": {
+    "dsh-web-search-openrouter": "0.1.0",
+    "dsh-browser-tool": "0.1.11",
+    "dsh-video-lens": "0.3.2"
+  },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-sdk-app"
+        "@deepseek-ai/dsh-sdk-app",
+        "dsh-browser-tool",
+        "dsh-video-lens"
       ]
     }
   }

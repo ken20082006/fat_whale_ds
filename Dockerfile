@@ -19,6 +19,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates tzdata ffmpeg curl xz-utils \
+        chromium fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Node.js（dsh 要）──────────────────────────────────────
@@ -53,16 +54,27 @@ RUN pip install -r requirements.txt -r requirements-dsh.txt
 
 COPY dafeijing/ ./dafeijing/
 COPY dsh/profile/ /opt/dsh-src/profile/
+COPY dsh/mcp/ /opt/dsh-mcp/
 COPY dsh/entrypoint.sh /usr/local/bin/dsh-entrypoint
-RUN chmod +x /usr/local/bin/dsh-entrypoint
+# ⚠️ **一定要清 CRLF。** Windows checkout 或者喺 Windows 用 Python
+# 改過檔，會令 shebang 變成 `#!/bin/sh\r` —— kernel 解讀唔到，
+# 執行時報 ENOENT（Python 就當 FileNotFoundError，訊息係
+# 「搵唔到 dsh」）。2026-10-20 撞過一次，好難察覺。
+RUN sed -i 's/\r$//' /usr/local/bin/dsh-entrypoint \
+    && chmod +x /usr/local/bin/dsh-entrypoint
 
-# ⚠️ **profile 喺 build 時起好。** dsh 第一次見到未知 profile 名會由
-# template 初始化，但嗰陣先裝 out-of-tree plugin 就要開機時跑 pnpm。
-# 呢度依賴係空，所以冇嘢要裝，只係砌好個目錄結構。
+# ⚠️ **profile 喺 build 時起好，而且要裝 out-of-tree plugin。**
+# dsh 第一次見到未知 profile 名會由 template 初始化，但嗰陣先裝
+# out-of-tree plugin 就要開機時跑 pnpm —— 拖幾分鐘，離線就死。
+#
+# ⚠️ `dsh plugin` 喺 npm 版用唔到（官方："npm launches omit plugin
+# operations"），所以直接行 pnpm。
 RUN mkdir -p "${DSH_HOME}/profiles/fatwhale-sdk" \
     && cp /opt/dsh-src/profile/package.json "${DSH_HOME}/profiles/fatwhale-sdk/package.json" \
     && cp /opt/dsh-src/profile/pnpm-workspace.yaml "${DSH_HOME}/profiles/fatwhale-sdk/pnpm-workspace.yaml" \
-    && cp /opt/dsh-src/profile/cordis.patch.yml "${DSH_HOME}/profiles/fatwhale-sdk/cordis.patch.yml"
+    && cp /opt/dsh-src/profile/cordis.patch.yml "${DSH_HOME}/profiles/fatwhale-sdk/cordis.patch.yml" \
+    && cd "${DSH_HOME}/profiles/fatwhale-sdk" \
+    && pnpm install --prod=false
 
 # 維運腳本也放進去，這樣在容器裡就能跑自我檢查，不必另外裝 Python：
 #   docker compose exec router python scripts/router_smoke.py
@@ -70,12 +82,10 @@ COPY scripts/ ./scripts/
 
 # 掛載點（見 repo 根 docker-compose.yml）。**兩隻 bot 各有自己嘅 CWD**：
 #
-#   大肥鯨      → /app          相對路徑 data/、logs/、hermes/data/cache/videos
-#   貝爾法斯特  → /app/belfast  相對路徑 data/、logs
+#   大肥鯨 → /app  相對路徑 data/、logs/、data/videos
 #
-# 所以兩層目錄都要預先建好 —— compose 嘅 `working_dir` 指去唔存在嘅目錄
-# 會直接起唔到。
-RUN mkdir -p data logs hermes/data/cache/videos belfast/data belfast/logs \
+# 目錄要預先建好 —— 相對路徑唔存在會令寫檔失敗。
+RUN mkdir -p data logs data/videos \
     && useradd -m whale && chown -R whale:whale /app
 
 # ⚠️ **唔可以轉 `whale` 用戶。** dsh 要寫 $DSH_HOME（掛載自

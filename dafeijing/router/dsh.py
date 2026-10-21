@@ -62,6 +62,16 @@ DEFAULT_TIMEOUT = 180.0
 # 啟動最多等幾久。dsh 要載入成個 Cordis plugin tree。
 STARTUP_TIMEOUT = 90.0
 
+# asyncio StreamReader 嘅每行上限。
+# 預設 64 KiB 太細 —— dsh 一則 JSON-RPC frame 可以好大（長回覆、
+# 或者 `session.event` 帶完整 message），爆咗會拋
+# `Separator is found, but chunk is longer than limit`，
+# 然後成條 read loop 死，之後所有回覆都收唔到。
+#
+# 2026-10-20 真機爆咗一次（room 群組長對話）。
+# 16 MiB 足夠任何正常回覆（`maxTokens` 上限 32768，即最多幾百 KB）。
+_STREAM_LIMIT = 16 * 1024 * 1024
+
 # Telegram 啲 data URL 長度可以好大（一張 1280px JPEG 約 200KB base64）。
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
@@ -69,6 +79,13 @@ _DATA_URL = re.compile(r"^data:(image/[a-z+.-]+);base64,(.*)$", re.IGNORECASE | 
 
 # dsh 個圖片 block 只收呢幾種（見 apiproxy 嘅 `promptContentPartSchema`）。
 _ALLOWED_MEDIA = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+
+# 模型「想完就停」時用嘅回覆。
+#
+# 唔好用「出咗狀況」—— 嗰句係 Router 嘅錯誤訊息，但呢個 situation
+# 其實 turn 正常完成，只係模型冇講嘢。用一句中性嘅，順便叫對方
+# 再講一次。
+EMPTY_REPLY = "本鯨頭先諗得太入神，唔記得講嘢。你再講一次？"
 
 
 class DshError(RuntimeError):
@@ -98,10 +115,22 @@ class _Turn:
 
 
 def _data_url_to_part(url: str) -> dict[str, Any] | None:
-    """`data:image/jpeg;base64,...` → dsh 嘅 image block。
+    """`data:image/jpeg;base64,...` → dsh SDK 嘅 image block。
+
+    ⚠️ **欄位名係 `mimeType`，唔係 `mediaType`。**
+    SDK server（`dsh-sdk-jsonrpc-server`）係咁讀嘅：
+
+        mediaType: image.mimeType      // 見 lib/index.js 嘅 durablePromptContent
+
+    寫錯咗會變成 `undefined`，然後回：
+        Image type undefined is not accepted by this deployment.
+    （2026-10-20 真機撞到 —— 圖片同貼圖全部失敗。）
+    注意：HTTP API 嗰邊（`PromptContentPart`）係用 `mediaType`，
+    兩套唔同，唔好撈亂。
+
+    `data` 係**純 base64**，唔可以帶 `data:` prefix。
 
     格式唔啱或者太大就回 None —— 圖片係加分項，唔可以令整則訊息送唔到。
-    （同 `router/images.py` 嘅取捨一致。）
     """
     match = _DATA_URL.match(url.strip())
     if not match:
@@ -114,7 +143,7 @@ def _data_url_to_part(url: str) -> dict[str, Any] | None:
     if len(data) > _MAX_IMAGE_BYTES * 4 // 3:
         logger.warning("圖片太大（base64 %d bytes），略過", len(data))
         return None
-    return {"type": "image", "mediaType": media_type, "data": data}
+    return {"type": "image", "mimeType": media_type, "data": data}
 
 
 def build_content(text: str, images: list[str] | None) -> list[dict[str, Any]]:
@@ -198,6 +227,9 @@ class DshClient:
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._turns: dict[str, _Turn] = {}
+        # 今次 process 內已經處理過（resume 過或者開過）嘅 session。
+        # 純記憶體 —— Router 重啟後會再試一次 resume，正確。
+        self._known_sessions: set[str] = set()
         self._initialized = False
         self._closed = False
         self._stderr_tail: list[str] = []
@@ -208,8 +240,24 @@ class DshClient:
         """起 process 並做 `initialize`。重複叫冇害。"""
         if self._initialized:
             return
-        if self._proc is not None and self._proc.returncode is None:
-            return
+
+        # ⚠️ **唔可以只睇 `returncode`。**
+        # stdout 讀取失敗（例如行太長）會令 read loop 死咗，但條
+        # process 可能仍然生存 —— 咁樣寫入 stdin 都冇人讀，請求會
+        # 永遠等唔到回應。所以舊 process 一律殺咗再起。
+        if self._proc is not None:
+            if self._proc.returncode is None:
+                try:
+                    self._proc.kill()
+                except ProcessLookupError:
+                    pass
+                except Exception:  # noqa: BLE001
+                    pass
+            self._proc = None
+        for task in (self._reader, self._stderr_reader):
+            if task is not None and not task.done():
+                task.cancel()
+        self._reader = self._stderr_reader = None
 
         self._closed = False
         try:
@@ -220,6 +268,15 @@ class DshClient:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._cwd,
                 env=self._env,
+                # ⚠️ **一定要加大 `limit`。**
+                # asyncio 嘅 StreamReader 預設每行上限 64 KiB；超過就拋
+                # `Separator is found, but chunk is longer than limit`，
+                # 成條 read loop 死，之後所有回覆都收唔到。
+                #
+                # dsh 一則 SSE 風格嘅 JSON-RPC frame 可以好大 ——
+                # 長回覆、或者 `session.event` 帶完整 message 內容。
+                # 2026-10-20 真機爆咗一次（room 群組長對話）。
+                limit=_STREAM_LIMIT,
             )
         except FileNotFoundError as exc:
             raise DshError(f"搵唔到 dsh：{self._command[0]}") from exc
@@ -292,7 +349,12 @@ class DshClient:
         return " / ".join(self._stderr_tail[-3:])[:400]
 
     async def _drain_stderr(self) -> None:
-        """食晒 stderr，留最後幾行做錯誤提示。唔食會塞爆 pipe。"""
+        """食晒 stderr，留最後幾行做錯誤提示。唔食會塞爆 pipe。
+
+        ⚠️ **用 INFO 而唔係 DEBUG。** dsh 將模型呼叫失敗、plugin 錯誤
+        全部寫 stderr，睇唔到就等於盲。呢啲行每則訊息最多幾行，
+        唔會洗版。
+        """
         proc = self._proc
         if proc is None or proc.stderr is None:
             return
@@ -301,8 +363,8 @@ class DshClient:
                 line = raw.decode("utf-8", "replace").rstrip()
                 if line:
                     self._stderr_tail.append(line)
-                    del self._stderr_tail[:-20]
-                    logger.debug("dsh stderr: %s", line)
+                    del self._stderr_tail[:-40]
+                    logger.info("dsh stderr: %s", line)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -336,9 +398,15 @@ class DshClient:
         except Exception as exc:  # noqa: BLE001
             logger.warning("dsh stdout 讀取失敗：%s", exc)
         finally:
+            # ⚠️ **一定要重設 `_initialized`。**
+            # 唔重設嘅話，process 死咗之後 `ask()` 見到
+            # `_initialized is True` 就唔會重開，之後每則都失敗。
+            # 2026-10-20 真機撞到（stdout 行太長 → read loop 死）。
+            self._initialized = False
             if not self._closed:
                 hint = self._stderr_hint()
-                self._fail_pending(f"dsh process 結束{hint + '：' + hint if hint else ''}")
+                reason = f"：{hint}" if hint else ""
+                self._fail_pending(f"dsh process 結束{reason}")
 
     def _handle_frame(self, frame: dict[str, Any]) -> None:
         # 回應：有 id、冇 method
@@ -355,11 +423,16 @@ class DshClient:
             return
 
         # notification：有 method、冇 id
+        #
+        # ⚠️ **method 名係點號，唔係斜線。**
+        # `session.event` / `session.status` —— 但 *request* 係
+        # `session/prompt` / `session/resume`（斜線）。兩套唔同，
+        # 2026-10-20 寫錯咗斜線，結果所有回覆都被靜靜丟棄。
         method = frame.get("method")
         params = frame.get("params") or {}
-        if method == "session/event":
+        if method == "session.event":
             self._on_event(params.get("sessionId"), params.get("event") or {})
-        elif method == "session/status":
+        elif method == "session.status":
             if params.get("status") == "running":
                 logger.debug("dsh %s running", params.get("sessionId"))
 
@@ -415,12 +488,61 @@ class DshClient:
 
     # ── 對外 API ────────────────────────────────────────
 
+    async def _ensure_session(self, session_id: str) -> None:
+        """確保 session 已經交畀 agent，或者確認佢係全新。
+
+        分兩種情況：
+
+        - **disk 有紀錄**（Router 重啟過）→ `session/resume`。佢會載返
+          整段歷史，並修好上次中斷咗嘅 turn。
+        - **乜都冇** → 唔好理，交畀 `session/prompt` 自己 `create()`。
+
+        ⚠️ 唔可以盲試 `session/prompt` 先 —— 對已有紀錄嘅 id 會爆
+        `already exists`（2026-10-20 真機撞到）。
+
+        ⚠️ 只記住「今次 process 內處理過」。Router 重啟後第一則訊息
+        會再試一次 resume —— 正確，因為嗰時就係要接返舊紀錄。
+        """
+        if session_id in self._known_sessions:
+            return
+        try:
+            await self._request("session/resume", {"sessionId": session_id})
+            logger.info("dsh 接返舊 session：%s", session_id)
+        except DshError as exc:
+            # 冇紀錄 → 交由 prompt 開新嘅。官方明講 resume
+            # 「Rejects missing... never creates a replacement」，所以呢個
+            # 失敗係預期之內。
+            logger.debug("session/resume(%s) 唔得，當新 session：%s", session_id, exc)
+        self._known_sessions.add(session_id)
+
     async def ask(
         self, session_id: str, text: str, images: list[str] | None = None
     ) -> Reply:
         """送一則入去指定 session，等佢講完，回傳文字。
 
         ⚠️ 一定要先 `start()`。
+
+        ## 為什麼要先 `session/resume`
+
+        `session/prompt` 對未見過嘅 id 會用 `agents.create()`。但如果嗰條
+        id **已經喺 disk 有紀錄**（例如 Router 重啟過），`create()`
+        會爆 `session "..." already exists` —— 呢個係 2026-10-20 真機
+        測試撞到嘅。
+
+        所以流程係：
+
+            第一次見（process 內）→ 試 session/resume
+                                     失敗（冇紀錄）→ session/prompt 自動開
+            之後同一條 → 直茬 session/prompt
+
+        ## ⚠️ resume 會重播歷史
+
+        `session/resume` 一載入就會將 session 嘅 log 事件（包括上一輪
+        嘅 `assistant/message` 同 `turn/end`）推返出嚟。所以**一定要
+        resume 完之後才註冊 turn collector**，否則會即刻收到一條舊嘅
+        `turn/end`，`wait()` 立即返回但文字係空 —— 結果就係卡住。
+
+        （2026-10-20 真機撞到：dsh 明明答咗，Router 完全冇送出。）
         """
         content = build_content(text, images)
         if not content:
@@ -430,6 +552,10 @@ class DshClient:
 
         if session_id in self._turns and not self._turns[session_id].done.is_set():
             raise DshError(f"session {session_id} 已經有一輪喺度跑")
+
+        # ⚠️ 次序係關鍵：resume **先**，collector **後**。
+        # 調轉嘅話會食到 resume 重播嘅歷史事件。
+        await self._ensure_session(session_id)
 
         turn = _Turn(session_id=session_id)
         self._turns[session_id] = turn
@@ -448,7 +574,16 @@ class DshClient:
 
             answer = "\n".join(turn.text).strip()
             if not answer:
-                raise DshError("dsh 講完但冇任何文字")
+                # 模型有時會「想完就停」—— turn 正常完成，但只出咗
+                # reasoning、冇 text block（`stopReason: "stop"`）。
+                # 2026-10-20 群組真機撞到一次。
+                #
+                # 呢個唔算錯誤：dsh 本身認為成功咗。所以用一個中性嘅
+                # 內建回覆，唔好拋錯令 Router 講「出咗狀況」。
+                logger.warning(
+                    "dsh %s turn 完成但冇文字（只有 reasoning）", session_id
+                )
+                answer = EMPTY_REPLY
 
             reply = Reply(
                 text=answer,
